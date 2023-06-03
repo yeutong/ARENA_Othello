@@ -1,8 +1,8 @@
 # %%
-%pip install git+https://github.com/neelnanda-io/neel-plotly
+# %pip install git+https://github.com/neelnanda-io/neel-plotly
 
 # %%
-import streamlit as st
+# import streamlit as st
 import os
 os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 import sys
@@ -43,117 +43,144 @@ import pytorch_lightning as pl
 from rich import print as rprint
 import pandas as pd
 
+# Make sure exercises are in the path
+
+working_dir = Path(f"{os.getcwd()}").resolve()
+
 from plotly_utils import imshow
 from neel_plotly import scatter, line
 
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
-working_dir = Path(os.getcwd())
 
 t.set_grad_enabled(False)
 
 MAIN = __name__ == "__main__"
-# %%
+
+# %% 1️⃣ MODEL SETUP & LINEAR PROBES
+
+
 if MAIN:
-    cfg = HookedTransformerConfig(
-        n_layers = 8,
-        d_model = 512,
-        d_head = 64,
-        n_heads = 8,
-        d_mlp = 2048,
-        d_vocab = 61,
-        n_ctx = 59,
-        act_fn="gelu",
-        normalization_type="LNPre",
-        device=device,
-    )
-    model = HookedTransformer(cfg)
+	cfg = HookedTransformerConfig(
+		n_layers = 8,
+		d_model = 512,
+		d_head = 64,
+		n_heads = 8,
+		d_mlp = 2048,
+		d_vocab = 61,
+		n_ctx = 59,
+		act_fn="gelu",
+		normalization_type="LNPre",
+		device=device,
+	)
+	model = HookedTransformer(cfg)
+
 # %%
+
+
 if MAIN:
-    sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "synthetic_model.pth")
-    # champion_ship_sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "championship_model.pth")
-    model.load_state_dict(sd)
+	sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "synthetic_model.pth")
+	# champion_ship_sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "championship_model.pth")
+	model.load_state_dict(sd)
+
 
 # %%
+
+
 if MAIN:
-    os.chdir(working_dir)
-
-    OTHELLO_ROOT = (working_dir / "othello_world").resolve()
-    OTHELLO_MECHINT_ROOT = (OTHELLO_ROOT / "mechanistic_interpretability").resolve()
-
-    if not OTHELLO_ROOT.exists():
-        !git clone https://github.com/likenneth/othello_world
-
-    sys.path.append(str(OTHELLO_MECHINT_ROOT))
+	os.chdir(working_dir)
+	
+	OTHELLO_ROOT = (working_dir / "othello_world").resolve()
+	OTHELLO_MECHINT_ROOT = (OTHELLO_ROOT / "mechanistic_interpretability").resolve()
+	
+	if not OTHELLO_ROOT.exists():
+		!git clone https://github.com/likenneth/othello_world
+	
+	if OTHELLO_MECHINT_ROOT not in sys.path:
+		sys.path.append(str(OTHELLO_MECHINT_ROOT))
 
 # %%
+
 from mech_interp_othello_utils import plot_board, plot_single_board, plot_board_log_probs, to_string, to_int, int_to_label, string_to_label, OthelloBoardState
+
 # %%
+
 # Load board data as ints (i.e. 0 to 60)
 
 if MAIN:
-    board_seqs_int = t.tensor(np.load(OTHELLO_MECHINT_ROOT / "board_seqs_int_small.npy"), dtype=t.long)
-    # Load board data as "strings" (i.e. 0 to 63 with middle squares skipped out)
-    board_seqs_string = t.tensor(np.load(OTHELLO_MECHINT_ROOT / "board_seqs_string_small.npy"), dtype=t.long)
+	board_seqs_int = t.tensor(np.load(OTHELLO_MECHINT_ROOT / "board_seqs_int_small.npy"), dtype=t.long)
+	# Load board data as "strings" (i.e. 0 to 63 with middle squares skipped out)
+	board_seqs_string = t.tensor(np.load(OTHELLO_MECHINT_ROOT / "board_seqs_string_small.npy"), dtype=t.long)
+	
+	assert all([middle_sq not in board_seqs_string for middle_sq in [27, 28, 35, 36]])
+	assert board_seqs_int.max() == 60
+	
+	num_games, length_of_game = board_seqs_int.shape
+	print("Number of games:", num_games)
+	print("Length of game:", length_of_game)
 
-    assert all([middle_sq not in board_seqs_string for middle_sq in [27, 28, 35, 36]])
-    assert board_seqs_int.max() == 60
-
-    num_games, length_of_game = board_seqs_int.shape
-    print("Number of games:", num_games)
-    print("Length of game:", length_of_game)
 # %%
+
 # Define possible indices (excluding the four center squares)
 
 if MAIN:
-    stoi_indices = [i for i in range(64) if i not in [27, 28, 35, 36]]
-
-    # Define our rows, and the function that converts an index into a (row, column) label, e.g. `E2`
-    alpha = "ABCDEFGH"
-
+	stoi_indices = [i for i in range(64) if i not in [27, 28, 35, 36]]
+	
+	# Define our rows, and the function that converts an index into a (row, column) label, e.g. `E2`
+	alpha = "ABCDEFGH"
+	
 def to_board_label(i):
-    return f"{alpha[i//8]}{i%8}"
+	return f"{alpha[i//8]}{i%8}"
 
 # Get our list of board labels
 
 if MAIN:
-    board_labels = list(map(to_board_label, stoi_indices))
-# %%
-if MAIN:
-    moves_int = board_seqs_int[0, :30]
+	board_labels = list(map(to_board_label, stoi_indices))
 
-    # This is implicitly converted to a batch of size 1
-    logits: Tensor = model(moves_int)
-    print("logits:", logits.shape)
 # %%
-if MAIN:
-    logit_vec = logits[0, -1]
-    log_probs = logit_vec.log_softmax(-1)
-    # Remove the "pass" move (the zeroth vocab item)
-    log_probs = log_probs[1:]
-    assert len(log_probs)==60
 
-    # Set all cells to -13 by default, for a very negative log prob - this means the middle cells don't show up as mattering
-    temp_board_state = t.zeros((8, 8), dtype=t.float32, device=device) - 13.
-    temp_board_state.flatten()[stoi_indices] = log_probs
+
+if MAIN:
+	moves_int = board_seqs_int[0, :30]
+	
+	# This is implicitly converted to a batch of size 1
+	logits: Tensor = model(moves_int)
+	print("logits:", logits.shape)
+
 # %%
+
+
+if MAIN:
+	logit_vec = logits[0, -1]
+	log_probs = logit_vec.log_softmax(-1)
+	# Remove the "pass" move (the zeroth vocab item)
+	log_probs = log_probs[1:]
+	assert len(log_probs)==60
+	
+	# Set all cells to -13 by default, for a very negative log prob - this means the middle cells don't show up as mattering
+	temp_board_state = t.zeros((8, 8), dtype=t.float32, device=device) - 13.
+	temp_board_state.flatten()[stoi_indices] = log_probs
+
+# %%
+
 def plot_square_as_board(state, diverging_scale=True, **kwargs):
-    '''Takes a square input (8 by 8) and plot it as a board. Can do a stack of boards via facet_col=0'''
-    kwargs = {
-        "y": [i for i in alpha],
-        "x": [str(i) for i in range(8)],
-        "color_continuous_scale": "RdBu" if diverging_scale else "Blues",
-        "color_continuous_midpoint": 0. if diverging_scale else None,
-        "aspect": "equal",
-        **kwargs
-    }
-    imshow(state, **kwargs)
-
+	"""Takes a square input (8 by 8) and plot it as a board. Can do a stack of boards via facet_col=0"""
+	kwargs = {
+		"y": [i for i in alpha],
+		"x": [str(i) for i in range(8)],
+		"color_continuous_scale": "RdBu" if diverging_scale else "Blues",
+		"color_continuous_midpoint": 0. if diverging_scale else None,
+		"aspect": "equal",
+		**kwargs
+	}
+	imshow(state, **kwargs)
+	
 
 if MAIN:
-    plot_square_as_board(temp_board_state.reshape(8, 8), zmax=0, diverging_scale=False, title="Example Log Probs")
+	plot_square_as_board(temp_board_state.reshape(8, 8), zmax=0, diverging_scale=False, title="Example Log Probs")
+
 # %%
-if MAIN:
-    plot_single_board(int_to_label(moves_int))
+# if MAIN:
+#     plot_single_board(int_to_label(moves_int))
 # %%
 if MAIN:
     num_games = 50
@@ -180,19 +207,19 @@ if MAIN:
     print("focus states:", focus_states.shape)
     print("focus_valid_moves", tuple(focus_valid_moves.shape))
 # %%
-if MAIN:
-    imshow(
-        focus_states[0, :16],
-        facet_col=0,
-        facet_col_wrap=8,
-        facet_labels=[f"Move {i}" for i in range(1, 17)],
-        title="First 16 moves of first game",
-        color_continuous_scale="Greys",
-    )
+# if MAIN:
+#     imshow(
+#         focus_states[0, :16],
+#         facet_col=0,
+#         facet_col_wrap=8,
+#         facet_labels=[f"Move {i}" for i in range(1, 17)],
+#         title="First 16 moves of first game",
+#         color_continuous_scale="Greys",
+#     )
 # %%
 if MAIN:
     focus_logits, focus_cache = model.run_with_cache(focus_games_int[:, :-1].to(device))
-    focus_logits.shape # torch.Size([50 games, 59 moves, 61 tokens]) 
+    # focus_logits.shape # torch.Size([50 games, 59 moves, 61 tokens]) 
 # %%
 if MAIN:
     full_linear_probe = t.load(OTHELLO_MECHINT_ROOT / "main_linear_probe.pth")
@@ -227,27 +254,27 @@ def plot_probe_outputs(layer, game_index, move, **kwargs):
     probabilities = probe_out.softmax(dim=-1)
     plot_square_as_board(probabilities, facet_col=2, facet_labels=["P(Empty)", "P(Their's)", "P(Mine)"], **kwargs)
 
-if MAIN:
-    plot_probe_outputs(layer, game_index, move, title="Example probe outputs after move 29 (black to play)")
+# if MAIN:
+#     plot_probe_outputs(layer, game_index, move, title="Example probe outputs after move 29 (black to play)")
 
-    plot_single_board(int_to_label(focus_games_int[game_index, :move+1]))
+#     plot_single_board(int_to_label(focus_games_int[game_index, :move+1]))
 # %%
-if MAIN:
-    layer = 4
-    game_index = 0
-    move = 29
+# if MAIN:
+#     layer = 4
+#     game_index = 0
+#     move = 29
 
-    plot_probe_outputs(layer, game_index, move, title="Example probe outputs at layer 4 after move 29 (black to play)")
-    plot_single_board(int_to_label(focus_games_int[game_index, :move+1]))
+#     plot_probe_outputs(layer, game_index, move, title="Example probe outputs at layer 4 after move 29 (black to play)")
+#     plot_single_board(int_to_label(focus_games_int[game_index, :move+1]))
 # %%
-if MAIN:
-    layer = 4
-    game_index = 0
-    move = 30
+# if MAIN:
+#     layer = 4
+#     game_index = 0
+#     move = 30
 
-    plot_probe_outputs(layer, game_index, move, title="Example probe outputs at layer 4 after move 30 (white to play)")
+#     plot_probe_outputs(layer, game_index, move, title="Example probe outputs at layer 4 after move 30 (white to play)")
 
-    plot_single_board(focus_games_string[game_index, :31])
+#     plot_single_board(focus_games_string[game_index, :31])
 # %%
 def state_stack_to_one_hot(state_stack):
     '''
@@ -282,6 +309,7 @@ if MAIN:
 
     # Take the argmax (i.e. the index of option empty/their/mine)
     focus_states_flipped_value = focus_states_flipped_one_hot.argmax(dim=-1)
+
 # %%
 if MAIN:
     probe_out = einops.einsum(
@@ -298,12 +326,12 @@ if MAIN:
     correct_middle_answers = (probe_out_value.cpu() == focus_states_flipped_value[:, :-1])[:, 5:-5]
     accuracies = einops.reduce(correct_middle_answers.float(), "game move row col -> row col", "mean")
 
-    plot_square_as_board(
-        1 - t.stack([accuracies_odd, accuracies], dim=0),
-        title="Average Error Rate of Linear Probe", 
-        facet_col=0, facet_labels=["Black to Play moves", "All Moves"], 
-        zmax=0.25, zmin=-0.25
-    )
+    # plot_square_as_board(
+    #     1 - t.stack([accuracies_odd, accuracies], dim=0),
+    #     title="Average Error Rate of Linear Probe", 
+    #     facet_col=0, facet_labels=["Black to Play moves", "All Moves"], 
+    #     zmax=0.25, zmin=-0.25
+    # )
 # %%
 if MAIN:
     blank_probe = linear_probe[..., 0] - (linear_probe[..., 1] + linear_probe[..., 2]) / 2
@@ -350,6 +378,7 @@ def apply_scale(resid: Float[Tensor, "batch=1 seq d_model"], flip_dir: Float[Ten
     alpha = resid[0, pos].dot(norm_flip_dir)
     resid[0, pos] -= (scale + 1)*alpha*norm_flip_dir
     return resid
+
 
 # %%
 
