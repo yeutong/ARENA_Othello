@@ -12,7 +12,8 @@ pytorch_lightning==2.0.2
 rich==13.4.1
 seaborn==0.12.2
 streamlit==1.22.0
-torch==2.1.0
+torch
+torchvision
 tqdm==4.65.0
 transformer_lens==1.2.2
 transformers==4.29.2
