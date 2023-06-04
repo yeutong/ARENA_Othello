@@ -764,8 +764,9 @@ def cal_score_read_my(
 layer = 5
 cell_label = 'C1'
 
-# cell_label = st.text_input('Target Cell', 'C0')
-# layer = st.slider('Layer', 0, 7, 5)
+if in_streamlit:
+    cell_label = st.text_input('Target Cell', 'C0')
+    layer = st.slider('Layer', 0, 7, 5)
 
 cell = (ord(cell_label[0]) - ord('A'), int(cell_label[-1])) # row and column of the cell
 
