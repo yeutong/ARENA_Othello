@@ -606,7 +606,7 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
     w_in_L5N1393_my = calculate_neuron_input_weights(model, my_probe_normalised, layer, neuron)
 
     fig = imshow(
-        t.stack([w_in_L5N1393_blank, w_in_L5N1393_my, top_detector]),
+        t.stack([w_in_L5N1393_blank, w_in_L5N1393_my, top_detector/3]),
         facet_col=0,
         y=[i for i in "ABCDEFGH"],
         title=f"Input weights in terms of the probe for neuron L{layer}N{neuron}",
@@ -762,7 +762,7 @@ def cal_score_read_my(
 # calculate the cosine similarity between the output weights and W_U for each neuron in specific layer
 
 layer = 5
-cell_label = 'C0'
+cell_label = 'C1'
 
 # cell_label = st.text_input('Target Cell', 'C0')
 # layer = st.slider('Layer', 0, 7, 5)
@@ -794,9 +794,8 @@ sub_score = {
 
 score = score_read_blank * score_write_unemb * score_read_my
 
-top_neurons = score.argsort(descending=True)[:3]
+top_neurons = score.argsort(descending=True)[:10]
 
-# %%
 # visualize the input and output weights for these neurons
 for neuron in top_neurons:
     neuron_and_blank_my_emb(layer, neuron, score, sub_score, top_detector[neuron])
