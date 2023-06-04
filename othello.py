@@ -633,11 +633,12 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
 
     # Spectrum plots
     top_detector_values = detector_to_values(top_detector)
-    label = (focus_states_flipped_value == top_detector_values).reshape(-1, )
+    label_board = (focus_states_flipped_value == top_detector_values) | top_detector_values.isnan()
+    label = label_board.reshape(*label_board.shape[:2], 8*8).all(dim=-1)
     neuron_acts = focus_cache['post', layer][..., neuron]
 
     fig = px.histogram(
-    pd.DataFrame({"acts": neuron_acts.tolist(), "label": label[:, :-1].tolist()}), 
+    pd.DataFrame({"acts": neuron_acts.flatten().tolist(), "label": label[:, :-1].flatten().tolist()}), 
     x="acts", color="label", histnorm="percent", barmode="group", nbins=100, 
     title=f"Spectrum plot for neuron N{neuron}",
     color_discrete_sequence=px.colors.qualitative.Bold
@@ -687,6 +688,7 @@ def gen_detector_vec(target_cell: Tuple[int, int], util_cell: Tuple[int, int]):
     ur, uc = util_cell
     detector_vec = t.full((8, 8), t.nan, dtype=t.float32)
     detector_vec[ur, uc] = 1
+    detector_vec[tr, tc] = 0
 
     r_dir = 1 if ur > tr else -1
     r_dir = 0 if ur == tr else r_dir
@@ -712,7 +714,8 @@ def detector_to_values(detector: Float[Tensor, 'row col']):
     """
     Map the values of detector to the focus_states_flipped_value convention
     """
-    values = t.zeros(8, 8)
+    values = t.full((8, 8), t.nan, dtype=t.float32)
+    values[detector == 0] = 0
     values[detector == 1] = 2
     values[detector == -1] = 1
     return values
@@ -747,8 +750,9 @@ def cal_score_read_my(
     d_mlp = w_in_my.shape[0]
 
     detectors = gen_detector_vecs(target_cell, util_cells).to(w_in_my.device)
-    detectors_norm = detectors / detectors.reshape(-1, 8*8).norm(dim=-1)[:, None, None] # shape: [util_cells, 8, 8]
-    util_score = t.nansum(w_in_my_norm[None, :] * detectors_norm[:, None], dim=[1, 2]), # d_mlp row col, cells row col -> cells d_mlp
+    detectors_num = t.nan_to_num(detectors, nan=0.0)
+    detectors_norm = detectors_num / detectors_num.reshape(-1, 8*8).norm(dim=-1)[:, None, None] # shape: [util_cells, 8, 8]
+    util_score = einops.einsum(w_in_my_norm, detectors_norm, 'd_mlp row col, cells row col -> cells d_mlp')
     top_score, top_idx = util_score.max(dim=0)
     
     # assert score.shape == (d_mlp,)
