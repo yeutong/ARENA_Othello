@@ -637,13 +637,21 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
     label = label_board.reshape(*label_board.shape[:2], 8*8).all(dim=-1)
     neuron_acts = focus_cache['post', layer][..., neuron]
 
-    fig = px.histogram(
-    pd.DataFrame({"acts": neuron_acts.flatten().tolist(), "label": label[:, :-1].flatten().tolist()}), 
-    x="acts", color="label", histnorm="percent", barmode="group", nbins=100, 
+    spectrum_data = pd.DataFrame({"acts": neuron_acts.flatten().tolist(), 
+                                  "label": label[:, :-1].flatten().tolist()})
+    
+    hist_fig = px.histogram(
+    spectrum_data, x="acts", color="label", 
+    histnorm="percent", barmode="group", nbins=100, 
     title=f"Spectrum plot for neuron N{neuron}",
     color_discrete_sequence=px.colors.qualitative.Bold
     )
-    if in_streamlit: st.plotly_chart(fig)
+    cross_fig = px.imshow(pd.crosstab(spectrum_data['acts'], 
+                                      spectrum_data['label']))
+    if in_streamlit: 
+         col1, col2 = st.columns(2)
+         col1.plotly_chart(fig)
+         col2.plotly_chart(cross_fig)
     else: fig.show()
 
 # if MAIN:
