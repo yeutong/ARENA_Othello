@@ -646,11 +646,14 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
     title=f"Spectrum plot for neuron N{neuron}",
     color_discrete_sequence=px.colors.qualitative.Bold
     )
-    cross_fig = px.imshow(pd.crosstab(spectrum_data['acts'], 
-                                      spectrum_data['label']))
+
+    cross_fig = px.imshow(pd.crosstab(
+         spectrum_data['acts'] > ACTIVATION_THRES, 
+         spectrum_data['label']
+    ), text_auto=True)
     if in_streamlit: 
-         col1, col2 = st.columns(2)
-         col1.plotly_chart(fig)
+         col1, col2 = st.columns([2, 1])
+         col1.plotly_chart(hist_fig)
          col2.plotly_chart(cross_fig)
     else: fig.show()
 
@@ -771,10 +774,12 @@ def cal_score_read_my(
 
 layer = 5
 cell_label = 'C1'
+ACTIVATION_THRES = 0
 
 if in_streamlit:
     cell_label = st.text_input('Target Cell', 'C0')
     layer = st.slider('Layer', 0, 7, 5)
+    ACTIVATION_THRES = st.slider('Activation threshold', min_value=0.0, max_value=1.0, value=0.0, step=0.05)
 
 cell = (ord(cell_label[0]) - ord('A'), int(cell_label[-1])) # row and column of the cell
 
@@ -807,6 +812,6 @@ top_neurons = score.argsort(descending=True)[:10]
 
 # visualize the input and output weights for these neurons
 for neuron in top_neurons:
-    neuron_and_blank_my_emb(layer, neuron, score, sub_score, top_detector[neuron])
+    neuron_and_blank_my_emb(layer, neuron.item(), score, sub_score, top_detector[neuron])
 
 # %%
