@@ -231,7 +231,7 @@ if MAIN:
     # focus_logits.shape # torch.Size([50 games, 59 moves, 61 tokens]) 
 # %%
 if MAIN:
-    full_linear_probe = t.load(OTHELLO_MECHINT_ROOT / "main_linear_probe.pth")
+    full_linear_probe = t.load(OTHELLO_MECHINT_ROOT / "main_linear_probe.pth", map_location=device)
 
     rows = 8
     cols = 8 
