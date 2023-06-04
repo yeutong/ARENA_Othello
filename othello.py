@@ -108,8 +108,7 @@ if OTHELLO_MECHINT_ROOT not in sys.path:
 
 # %%
 
-# from mech_interp_othello_utils import plot_board, plot_single_board, plot_board_log_probs, to_string, to_int, int_to_label, string_to_label, OthelloBoardState
-from othello_world.mechanistic_interpretability.mech_interp_othello_utils import plot_board, plot_single_board, plot_board_log_probs, to_string, to_int, int_to_label, string_to_label, OthelloBoardState
+from mech_interp_othello_utils import plot_board, plot_single_board, plot_board_log_probs, to_string, to_int, int_to_label, string_to_label, OthelloBoardState
 
 # %%
 
