@@ -58,7 +58,8 @@ working_dir = Path(f"{os.getcwd()}").resolve()
 from plotly_utils import imshow
 from neel_plotly import scatter, line
 
-device = t.device("cuda" if t.cuda.is_available() else "cpu")
+# device = t.device("cuda" if t.cuda.is_available() else "cpu")
+device = t.device("cpu")
 
 t.set_grad_enabled(False)
 
@@ -641,16 +642,17 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
                                   "label": label[:, :-1].flatten().tolist()})
     
     hist_fig = px.histogram(
-    spectrum_data, x="acts", color="label", 
-    histnorm="percent", barmode="group", nbins=100, 
-    title=f"Spectrum plot for neuron N{neuron}",
-    color_discrete_sequence=px.colors.qualitative.Bold
+        spectrum_data, x="acts", color="label", 
+        histnorm="percent", barmode="group", nbins=100, 
+        title=f"Spectrum plot for neuron L{layer}N{neuron}",
+        color_discrete_sequence=px.colors.qualitative.Bold
     )
 
     cross_fig = px.imshow(pd.crosstab(
          spectrum_data['acts'] > ACTIVATION_THRES, 
          spectrum_data['label']
     ), text_auto=True)
+
     if in_streamlit: 
          col1, col2 = st.columns([2, 1])
          col1.plotly_chart(hist_fig)
