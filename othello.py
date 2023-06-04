@@ -43,6 +43,14 @@ import pytorch_lightning as pl
 from rich import print as rprint
 import pandas as pd
 
+
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+if not get_script_run_ctx():
+    in_streamlit = False
+else:
+    in_streamlit = True
+
 # Make sure exercises are in the path
 
 working_dir = Path(f"{os.getcwd()}").resolve()
@@ -87,16 +95,16 @@ if MAIN:
 
 
 if MAIN:
-	os.chdir(working_dir)
-	
-	OTHELLO_ROOT = (working_dir / "othello_world").resolve()
-	OTHELLO_MECHINT_ROOT = (OTHELLO_ROOT / "mechanistic_interpretability").resolve()
-	
-	# if not OTHELLO_ROOT.exists():
-	# 	!git clone https://github.com/likenneth/othello_world
-	
-	if OTHELLO_MECHINT_ROOT not in sys.path:
-		sys.path.append(str(OTHELLO_MECHINT_ROOT))
+    os.chdir(working_dir)
+
+    OTHELLO_ROOT = (working_dir / "othello_world").resolve()
+    OTHELLO_MECHINT_ROOT = (OTHELLO_ROOT / "mechanistic_interpretability").resolve()
+
+    # if not OTHELLO_ROOT.exists():
+        # !git clone https://github.com/likenneth/othello_world
+
+if OTHELLO_MECHINT_ROOT not in sys.path:
+    sys.path.append(str(OTHELLO_MECHINT_ROOT))
 
 # %%
 
@@ -566,14 +574,18 @@ def neuron_output_weight_map_to_unemb(
     layer: int,
     neuron: int
 ) -> Float[Tensor, 'rows cols']:
+    
     neuron = get_w_out(model, layer, neuron, normalize=True)
     W_U_norm = model.W_U / model.W_U.norm(dim=0, keepdim=True)
     out = einops.einsum(neuron, W_U_norm, 'd_model, d_model n_vocab -> n_vocab')
     board = t.zeros(8, 8).to(model.cfg.device)
     board.flatten()[stoi_indices] = out[1:]
     return board
+
+
+
 # %%
-def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None):
+def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detector=None):
 
     if score is not None:
         score = score[neuron]
@@ -586,19 +598,23 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None):
         score_read_my = sub_score['read_my'][neuron]
         score_write_unemb = sub_score['write_unemb'][neuron]
 
-        st.write(f'read blank: {score_read_blank:2.2%}, read my: {score_read_my:2.2%}, write unemb: {score_write_unemb:2.2%}')
+        scores_str = f'read blank: {score_read_blank:2.2%}, read my: {score_read_my:2.2%}, write unemb: {score_write_unemb:2.2%}'
+        if in_streamlit: st.write(scores_str)
+        else: print(scores_str)
+
     w_in_L5N1393_blank = calculate_neuron_input_weights(model, blank_probe_normalised, layer, neuron)
     w_in_L5N1393_my = calculate_neuron_input_weights(model, my_probe_normalised, layer, neuron)
 
     fig = imshow(
-        t.stack([w_in_L5N1393_blank, w_in_L5N1393_my]),
+        t.stack([w_in_L5N1393_blank, w_in_L5N1393_my, top_detector]),
         facet_col=0,
         y=[i for i in "ABCDEFGH"],
         title=f"Input weights in terms of the probe for neuron L{layer}N{neuron}",
-        facet_labels=["Blank In", "My In"],
-        width=750,
+        facet_labels=["Blank In", "My In", "My In Top Detector"],
+        width=1100,
     )
-    st.plotly_chart(fig)
+    if in_streamlit: st.plotly_chart(fig)
+    else: fig.show()
 
     w_out_L5N1393_blank = calculate_neuron_output_weights(model, blank_probe_normalised, layer, neuron)
     w_out_L5N1393_my = calculate_neuron_output_weights(model, my_probe_normalised, layer, neuron)
@@ -612,7 +628,22 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None):
         facet_labels=["Blank Out", "My Out", 'Unemb'],
         width=1100,
     )
-    st.plotly_chart(fig)
+    if in_streamlit: st.plotly_chart(fig)
+    else: fig.show()
+
+    # Spectrum plots
+    top_detector_values = detector_to_values(top_detector)
+    label = (focus_states_flipped_value == top_detector_values).reshape(-1, )
+    neuron_acts = focus_cache['post', layer][..., neuron]
+
+    fig = px.histogram(
+    pd.DataFrame({"acts": neuron_acts.tolist(), "label": label[:, :-1].tolist()}), 
+    x="acts", color="label", histnorm="percent", barmode="group", nbins=100, 
+    title=f"Spectrum plot for neuron N{neuron}",
+    color_discrete_sequence=px.colors.qualitative.Bold
+    )
+    if in_streamlit: st.plotly_chart(fig)
+    else: fig.show()
 
 # if MAIN:
 #     layer = 5
@@ -654,7 +685,7 @@ def gen_detector_vec(target_cell: Tuple[int, int], util_cell: Tuple[int, int]):
     "return 8 * 8 map, 1 for based_cell and -1 for cells between based_cell and target_cell, 0 for other cells"
     tr, tc = target_cell
     ur, uc = util_cell
-    detector_vec = t.zeros(8, 8)
+    detector_vec = t.full((8, 8), t.nan, dtype=t.float32)
     detector_vec[ur, uc] = 1
 
     r_dir = 1 if ur > tr else -1
@@ -670,6 +701,22 @@ def gen_detector_vec(target_cell: Tuple[int, int], util_cell: Tuple[int, int]):
 
     return detector_vec
 
+def gen_detector_vecs(target_cell: Tuple[int, int], util_cells: List[Tuple[int, int]]):
+    detector_vecs = []
+    for util_cell in util_cells:
+        detector_vec = gen_detector_vec(target_cell, util_cell)
+        detector_vecs.append(detector_vec)
+    return t.stack(detector_vecs)
+
+def detector_to_values(detector: Float[Tensor, 'row col']):
+    """
+    Map the values of detector to the focus_states_flipped_value convention
+    """
+    values = t.zeros(8, 8)
+    values[detector == 1] = 2
+    values[detector == -1] = 1
+    return values
+     
 def cal_score_read_blank(
     w_in_blank: Float[Tensor, 'd_mlp row col'],
     target_cell: Tuple[int, int],
@@ -698,22 +745,24 @@ def cal_score_read_my(
 
     util_cells = possible_util_cell(target_cell)
     d_mlp = w_in_my.shape[0]
-    score = t.zeros(d_mlp).to(w_in_my.device)
-    for util_cell in util_cells:
-        detector = gen_detector_vec(target_cell, util_cell).to(w_in_my.device)
-        detector_norm = detector / detector.norm() # shape: [8, 8]
-        util_score = einops.einsum(w_in_my_norm, detector_norm, 'd_mlp row col, row col -> d_mlp')
-        score = t.maximum(score, util_score)
 
-    assert score.shape == (d_mlp,)
-    return score.clamp(min=0)
+    detectors = gen_detector_vecs(target_cell, util_cells).to(w_in_my.device)
+    detectors_norm = detectors / detectors.reshape(-1, 8*8).norm(dim=-1)[:, None, None] # shape: [util_cells, 8, 8]
+    util_score = t.nansum(w_in_my_norm[None, :] * detectors_norm[:, None], dim=[1, 2]), # d_mlp row col, cells row col -> cells d_mlp
+    top_score, top_idx = util_score.max(dim=0)
+    
+    # assert score.shape == (d_mlp,)
+    return top_score.clamp(min=0), detectors[top_idx]
 
 # %%
 # calculate the cosine similarity between the output weights and W_U for each neuron in specific layer
-# layer = 5
-# cell_label = 'C0'
-cell_label = st.text_input('Target Cell', 'C0')
-layer = st.slider('Layer', 0, 7, 5)
+
+layer = 5
+cell_label = 'C0'
+
+# cell_label = st.text_input('Target Cell', 'C0')
+# layer = st.slider('Layer', 0, 7, 5)
+
 cell = (ord(cell_label[0]) - ord('A'), int(cell_label[-1])) # row and column of the cell
 
 w_in_L5 = model.W_in[layer, :, :] # shape: [d_model, d_mlp]
@@ -731,17 +780,21 @@ w_out_L5_umemb = einops.einsum(w_out_L5_norm, w_U_norm, 'd_mlp d_model, d_model 
 # select the top 5 neurons that have the highest cosine similarity between the output weights and W_U
 score_read_blank = cal_score_read_blank(w_in_L5_blank, cell)
 score_write_unemb = cal_score_write_unemb(w_out_L5_umemb, cell)
-score_read_my = cal_score_read_my(w_in_L5_my, cell)
+score_read_my, top_detector = cal_score_read_my(w_in_L5_my, cell)
 
 sub_score = {
     'read_blank': score_read_blank,
     'write_unemb': score_write_unemb,
     'read_my': score_read_my
 }
+
 score = score_read_blank * score_write_unemb * score_read_my
 
-top_neurons = score.argsort(descending=True)[:10]
+top_neurons = score.argsort(descending=True)[:3]
 
+# %%
 # visualize the input and output weights for these neurons
 for neuron in top_neurons:
-    neuron_and_blank_my_emb(layer, neuron, score, sub_score)
+    neuron_and_blank_my_emb(layer, neuron, score, sub_score, top_detector[neuron])
+
+# %%
