@@ -84,10 +84,13 @@ if MAIN:
 	model = HookedTransformer(cfg)
 
 # %%
-
+@st.cache_resource
+def load_model():
+     sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "synthetic_model.pth")
+     return sd
 
 if MAIN:
-	sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "synthetic_model.pth")
+	sd = load_model()
 	# champion_ship_sd = utils.download_file_from_hf("NeelNanda/Othello-GPT-Transformer-Lens", "championship_model.pth")
 	model.load_state_dict(sd)
 
@@ -170,7 +173,7 @@ if MAIN:
 	temp_board_state.flatten()[stoi_indices] = log_probs
 
 # %%
-
+@st.cache_data
 def plot_square_as_board(state, diverging_scale=True, **kwargs):
 	"""Takes a square input (8 by 8) and plot it as a board. Can do a stack of boards via facet_col=0"""
 	kwargs = {
@@ -226,8 +229,12 @@ if MAIN:
 #         color_continuous_scale="Greys",
 #     )
 # %%
+# @st.cache_data
+def run_model(_data):
+    return model.run_with_cache(_data)
+
 if MAIN:
-    focus_logits, focus_cache = model.run_with_cache(focus_games_int[:, :-1].to(device))
+    focus_logits, focus_cache = run_model(focus_games_int[:, :-1].to(device))
     # focus_logits.shape # torch.Size([50 games, 59 moves, 61 tokens]) 
 # %%
 if MAIN:
@@ -256,6 +263,7 @@ if MAIN:
     game_index = 0
     move = 29
 
+@st.cache_data
 def plot_probe_outputs(layer, game_index, move, **kwargs):
     residual_stream = focus_cache["resid_post", layer][game_index, move]
     # print("residual_stream", residual_stream.shape)
