@@ -50,6 +50,7 @@ if not get_script_run_ctx():
     in_streamlit = False
 else:
     in_streamlit = True
+    st.set_page_config(layout="wide")
 
 # Make sure exercises are in the path
 
@@ -58,8 +59,7 @@ working_dir = Path(f"{os.getcwd()}").resolve()
 from plotly_utils import imshow
 from neel_plotly import scatter, line
 
-# device = t.device("cuda" if t.cuda.is_available() else "cpu")
-device = t.device("cpu")
+device = t.device("cuda" if t.cuda.is_available() else "cpu")
 
 t.set_grad_enabled(False)
 
@@ -422,7 +422,7 @@ if MAIN:
 if MAIN:
     flip_state_big = t.stack(big_flipped_states_list)
     state_big = einops.repeat(state.flatten(), "d -> b d", b=6)
-    color = t.zeros((len(scales), 64)).cuda() + 0.2
+    color = t.zeros((len(scales), 64)).to(device) + 0.2
     for s in newly_legal:
         color[:, to_string(s)] = 1
     for s in newly_illegal:
@@ -777,11 +777,13 @@ def cal_score_read_my(
 layer = 5
 cell_label = 'C1'
 ACTIVATION_THRES = 0
+SCORING_METRIC = 'all' # choose from ['read_blank', 'write_unemb', 'read_my', 'all']
 
 if in_streamlit:
     cell_label = st.text_input('Target Cell', 'C0')
     layer = st.slider('Layer', 0, 7, 5)
     ACTIVATION_THRES = st.slider('Activation threshold', min_value=0.0, max_value=1.0, value=0.0, step=0.05)
+    SCORING_METRIC = st.selectbox('Scoring metric', ['read_blank', 'write_unemb', 'read_my', 'all'])
 
 cell = (ord(cell_label[0]) - ord('A'), int(cell_label[-1])) # row and column of the cell
 
@@ -808,7 +810,14 @@ sub_score = {
     'read_my': score_read_my
 }
 
-score = score_read_blank * score_write_unemb * score_read_my
+if SCORING_METRIC == 'all':
+    score = score_read_blank * score_write_unemb * score_read_my
+elif SCORING_METRIC == 'read_blank':
+    score = score_read_blank
+elif SCORING_METRIC == 'write_unemb':
+    score = score_write_unemb
+elif SCORING_METRIC == 'read_my':
+    score = score_read_my
 
 top_neurons = score.argsort(descending=True)[:10]
 
