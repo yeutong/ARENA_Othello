@@ -656,10 +656,11 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
         color_discrete_sequence=px.colors.qualitative.Bold
     )
 
-    cross_fig = px.imshow(pd.crosstab(
+    confusion_matrix = pd.crosstab(
          spectrum_data['acts'] > ACTIVATION_THRES, 
          spectrum_data['label']
-    ), text_auto=True)
+    )
+    cross_fig = px.imshow(confusion_matrix, text_auto=True)
 
     if in_streamlit: 
          col1, col2 = st.columns([2, 1])
@@ -832,5 +833,3 @@ top_neurons = score.argsort(descending=True)[:10]
 # visualize the input and output weights for these neurons
 for neuron in top_neurons:
     neuron_and_blank_my_emb(layer, neuron.item(), score, sub_score, top_detector[neuron])
-
-# %%
