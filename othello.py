@@ -614,31 +614,38 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
     w_in_L5N1393_blank = calculate_neuron_input_weights(model, blank_probe_normalised, layer, neuron)
     w_in_L5N1393_my = calculate_neuron_input_weights(model, my_probe_normalised, layer, neuron)
 
-    fig = imshow(
+
+    fig1 = imshow(
         t.stack([w_in_L5N1393_blank, w_in_L5N1393_my, top_detector/3]),
         facet_col=0,
         y=[i for i in "ABCDEFGH"],
         title=f"Input weights in terms of the probe for neuron L{layer}N{neuron}",
         facet_labels=["Blank In", "My In", "My In Top Detector"],
-        width=1100,
+        # width=800,
+        height=350,
     )
-    if in_streamlit: st.plotly_chart(fig)
-    else: fig.show()
 
     w_out_L5N1393_blank = calculate_neuron_output_weights(model, blank_probe_normalised, layer, neuron)
     w_out_L5N1393_my = calculate_neuron_output_weights(model, my_probe_normalised, layer, neuron)
     w_out_L5N1393_unemb = neuron_output_weight_map_to_unemb(model, layer, neuron)
 
-    fig = imshow(
+    fig2 = imshow(
         t.stack([w_out_L5N1393_blank, w_out_L5N1393_my, w_out_L5N1393_unemb]),
         facet_col=0,
         y=[i for i in "ABCDEFGH"],
         title=f"Output weights in terms of the probe for neuron L{layer}N{neuron}",
         facet_labels=["Blank Out", "My Out", 'Unemb'],
-        width=1100,
+        # width=800,
+        height=350,
     )
-    if in_streamlit: st.plotly_chart(fig)
-    else: fig.show()
+
+    if in_streamlit:
+        col1, col2 = st.columns([1, 1])
+        col1.plotly_chart(fig1)
+        col2.plotly_chart(fig2)
+    else:
+        fig1.show()
+        fig2.show()
 
     # Spectrum plots
     top_detector_values = detector_to_values(top_detector)
@@ -653,17 +660,18 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
         spectrum_data, x="acts", color="label", 
         histnorm="percent", barmode="group", nbins=100, 
         title=f"Spectrum plot for neuron L{layer}N{neuron}",
-        color_discrete_sequence=px.colors.qualitative.Bold
+        color_discrete_sequence=px.colors.qualitative.Bold,
+        height=350
     )
 
     confusion_matrix = pd.crosstab(
          spectrum_data['acts'] > ACTIVATION_THRES, 
          spectrum_data['label']
     )
-    cross_fig = px.imshow(confusion_matrix, text_auto=True)
+    cross_fig = px.imshow(confusion_matrix, text_auto=True, height=350)
 
     if in_streamlit: 
-         col1, col2 = st.columns([2, 1])
+         col1, col2 = st.columns([2, 2])
          col1.plotly_chart(hist_fig)
          col2.plotly_chart(cross_fig)
     else: fig.show()
@@ -789,10 +797,12 @@ ACTIVATION_THRES = 0
 SCORING_METRIC = 'all' # choose from ['read_blank', 'write_unemb', 'read_my', 'all']
 
 if in_streamlit:
-    cell_label = st.text_input('Target Cell', 'C0')
-    layer = st.slider('Layer', 0, 7, 5)
-    ACTIVATION_THRES = st.slider('Activation threshold', min_value=0.0, max_value=1.0, value=0.0, step=0.05)
-    SCORING_METRIC = st.selectbox('Scoring metric', ['read_blank', 'write_unemb', 'read_my', 'all'])
+    with st.sidebar:
+        cell_label = st.text_input('Target Cell', 'C0')
+        layer = st.slider('Layer', 0, 7, 5)
+
+        ACTIVATION_THRES = st.slider('Activation threshold', min_value=0.0, max_value=1.0, value=0.0, step=0.05)
+        SCORING_METRIC = st.selectbox('Scoring metric', ['read_blank', 'write_unemb', 'read_my', 'all'])
 
 cell = (ord(cell_label[0]) - ord('A'), int(cell_label[-1])) # row and column of the cell
 
@@ -831,5 +841,7 @@ elif SCORING_METRIC == 'read_my':
 top_neurons = score.argsort(descending=True)[:10]
 
 # visualize the input and output weights for these neurons
-for neuron in top_neurons:
-    neuron_and_blank_my_emb(layer, neuron.item(), score, sub_score, top_detector[neuron])
+tabs = st.tabs([f'L{layer}N{neuron}' for neuron in top_neurons])
+for neuron, tab in zip(top_neurons, tabs):
+    with tab:
+        neuron_and_blank_my_emb(layer, neuron.item(), score, sub_score, top_detector[neuron])
