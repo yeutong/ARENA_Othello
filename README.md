@@ -1,0 +1,1 @@
+run `streamlit run othello.py`
