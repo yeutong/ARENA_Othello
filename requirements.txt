@@ -19,4 +19,5 @@ transformer_lens==1.2.2
 transformers==4.29.2
 typeguard==4.0.0
 wandb==0.15.3
+st_pages
 git+https://github.com/neelnanda-io/neel-plotly
