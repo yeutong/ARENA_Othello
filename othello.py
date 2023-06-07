@@ -2,9 +2,10 @@
 # %pip install git+https://github.com/neelnanda-io/neel-plotly
 
 # %%
+
+
 from neel_plotly import scatter, line
 from plotly_utils import imshow
-from streamlit.runtime.scriptrunner import get_script_run_ctx
 import pandas as pd
 from rich import print as rprint
 import pytorch_lightning as pl
@@ -40,18 +41,26 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch as t
 import sys
-import streamlit as st
-from st_pages import show_pages_from_config, add_page_title
 import os
+
 os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 
 
-if not get_script_run_ctx():
-    in_streamlit = False
-else:
-    in_streamlit = True
-    st.set_page_config(layout="wide")
-    show_pages_from_config()
+
+ENABLE_STREAMLIT = False # allow the script to be run in streamlit
+in_streamlit = False # whether the script is run in streamlit
+
+if ENABLE_STREAMLIT:
+    from streamlit.runtime.scriptrunner import get_script_run_ctx # this will affect the plotly figure
+    import streamlit as st
+    from st_pages import show_pages_from_config, add_page_title
+
+    if not get_script_run_ctx():
+        in_streamlit = False
+    else:
+        in_streamlit = True
+        st.set_page_config(layout="wide")
+        show_pages_from_config()
 
 # Make sure exercises are in the path
 
@@ -100,7 +109,6 @@ if MAIN:
 # %%
 
 
-@st.cache_resource
 def load_model():
     sd = utils.download_file_from_hf(
         "NeelNanda/Othello-GPT-Transformer-Lens", "synthetic_model.pth")
@@ -179,7 +187,6 @@ if MAIN:
 # %%
 
 
-@st.cache_data
 def plot_square_as_board(state, diverging_scale=True, **kwargs):
     """Takes a square input (8 by 8) and plot it as a board. Can do a stack of boards via facet_col=0"""
     kwargs = {
@@ -283,7 +290,6 @@ if MAIN:
     move = 29
 
 
-@st.cache_data
 def plot_probe_outputs(layer, game_index, move, **kwargs):
     residual_stream = focus_cache["resid_post", layer][game_index, move]
     # print("residual_stream", residual_stream.shape)
@@ -842,7 +848,9 @@ def cal_score_read_my(
 # %%
 # calculate cosine similarity between blank probe, my probe and W_U
 
-SHOW_COSINE_SIM = st.checkbox('Show cosine similarity between probes and W_U')
+SHOW_COSINE_SIM = False
+if in_streamlit:
+    SHOW_COSINE_SIM = st.checkbox('Show cosine similarity between probes and W_U')
 
 def plot_cosine_sim(a: str, b: str):
     """
@@ -982,43 +990,90 @@ elif SCORING_METRIC == 'Enhance: read_blank * write_blank':
 elif SCORING_METRIC == 'Enhance: read_my * write_my':
     score = score_read_my * score_write_my
 
-top_neurons = score.argsort(descending=True)[:10]
+n_top_neurons = 1
+top_neurons = score.argsort(descending=True)[:n_top_neurons]
 
 # visualize the input and output weights for these neurons
-tabs = st.tabs([f'L{layer}N{neuron}' for neuron in top_neurons])
-for neuron, tab in zip(top_neurons, tabs):
-    with tab:
-        neuron_and_blank_my_emb(layer, neuron.item(),
-                                score, sub_score, top_detector[neuron])
+if in_streamlit:
+    tabs = st.tabs([f'L{layer}N{neuron}' for neuron in top_neurons])
+    for neuron, tab in zip(top_neurons, tabs):
+        with tab:
+            neuron_and_blank_my_emb(layer, neuron.item(),
+                                    score, sub_score, top_detector[neuron])
 
 # %%  
 
+def board_color_to_state(board: OthelloBoardState):
+    '''
+    board state: 1 is black, -1 is white, 0 is blank
+    next_hand_color: 1 is black, -1 is white
 
-def select_board_states(target_pos: str, target_state, board_repository=board_seqs_int):
-    target_idx = to_int(target_pos)
+    Return: 
+    1 is mine, -1 is theirs, 0 is blank
+    '''
+    next_hand_color = board.next_hand_color
+    return board.state * next_hand_color
+
+
+def detect_board_match(board, target_str: int, target_pos: Tuple[int, int], target_state: str):
+    board_state = board_color_to_state(board)
     
-    for board_state in board_repository:
-        if board_state[target_pos] == target_state:
-            yield board_state
+    if target_state == 'valid' and target_str in board.get_valid_moves():
+        return True
+    if target_state == 'invalid' and target_str not in board.get_valid_moves():
+        return True
+    elif target_state == 'blank' and board_state[target_pos[0], target_pos[1]] == 0:
+        return True
+    elif target_state == 'mine' and board_state[target_pos[0], target_pos[1]] == 1:
+        return True
+    elif target_state == 'theirs' and board_state[target_pos[0], target_pos[1]] == -1:
+        return True
+    
+    return False
 
+def select_board_states(target_label: List[str], target_state: List[str], batch_size=10, games=board_seqs_string):
+    """
+    target_pos: str, e.g. 'C0'
+    target_state: str, ['blank', 'mine', 'theirs', 'valid', 'invalid']
 
+    the model predict white first
+    board state: 1 is black, -1 is white, 0 is blank
+    """
+    assert all(t_state in ['blank', 'mine', 'theirs', 'valid', 'invalid'] for t_state in target_state)
+    
+    target_str = to_string(target_label)
+    target_pos = [(s // 8, s % 8) for s in target_str]
+    n_found = 0
+    
+    for game_string in games:
+        board = OthelloBoardState()
 
+        for idx, move in enumerate(game_string):
+            board.umpire(move)
 
+            if all([detect_board_match(board, *target_args) for 
+                    target_args in zip(target_str, target_pos, target_state)]): # Probably error here
+                n_found += 1
+                yield game_string[:idx+1]
+                if n_found >= batch_size:
+                    return
+            
 
+# selected_board_states = select_board_states(['C1', 'B2', 'A3', 'H0'], ['mine', 'valid', 'valid', 'blank'])
+# # selected_board_states_2 = select_board_states("C1", 'valid', selected_board_states)
+# game_str = next(selected_board_states)
+# plot_single_board(string_to_label(game_str))
 
-
+# orig_dataset = list(select_board_states(['C0'], ['valid'], batch_size=2))
+orig_dataset = list(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine'], batch_size=1))
+plot_single_board(string_to_label(orig_dataset[0]))
+alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], batch_size=1))
+plot_single_board(string_to_label(alter_dataset[0]))
 
 # %%
 
-game_index = 4
-move = 20
-
-# plot_single_board(focus_games_string[game_index, :move+1], title="Original Game (black plays E0)")
-# plot_single_board(focus_games_string[game_index, :move].tolist()+[16], title="Corrupted Game (blank plays C0)")
-
-clean_input = focus_games_int[[game_index], :move+1].clone()
-corrupted_input = focus_games_int[[game_index], :move+1].clone()
-corrupted_input[0, -1] = to_int("C0")
+clean_input = t.tensor(to_int(orig_dataset))
+corrupted_input = t.tensor(to_int(alter_dataset))
 
 # %% 
 
@@ -1029,9 +1084,9 @@ clean_log_probs = clean_logits.log_softmax(dim=-1)
 corrupted_log_probs = corrupted_logits.log_softmax(dim=-1)
 
 
-f0_index = to_int("F0")
-clean_f0_log_prob = clean_log_probs[0, -1, f0_index]
-corrupted_f0_log_prob = corrupted_log_probs[0, -1, f0_index]
+answer_index = to_int("C0")
+clean_log_prob = clean_log_probs[0, -1, answer_index]
+corrupted_log_prob = corrupted_log_probs[0, -1, answer_index]
 
 
 def patching_metric(patched_logits: Float[Tensor, "batch=1 seq=21 d_vocab=61"]):
@@ -1042,23 +1097,34 @@ def patching_metric(patched_logits: Float[Tensor, "batch=1 seq=21 d_vocab=61"]):
 	Should be linear function of the logits for the F0 token at the final move.
 	'''
 	patched_log_probs = patched_logits.log_softmax(dim=-1)
-	return (patched_log_probs[0, -1, f0_index] - corrupted_f0_log_prob) / (clean_f0_log_prob - corrupted_f0_log_prob)
+	return (patched_log_probs[0, -1, answer_index] - corrupted_log_prob) / (clean_log_prob - corrupted_log_prob)
+
+
+
 # %%
 import transformer_lens.patching as patching
 
-act_patch_resid_pre = patching.get_act_patch_resid_pre(
-    model = model,
-    corrupted_tokens = corrupted_input,
-    clean_cache = clean_cache,
-    patching_metric = patching_metric
-)
+def get_activation_patch_and_display(activation_type):
+    act_patch = getattr(patching, f'get_act_patch_{activation_type}')(
+        model = model,
+        corrupted_tokens = corrupted_input,
+        clean_cache = clean_cache,
+        patching_metric = patching_metric
+    )
 
-imshow(
-    act_patch_resid_pre, 
-    labels={"x": "Position", "y": "Layer"},
-    title="resid_pre Activation Patching",
-    width=600
-)
+    imshow(
+        act_patch, 
+        labels={"x": "Position", "y": "Layer"},
+        title=f"{activation_type} Activation Patching",
+        width=600
+    ).show()
+
+
+activation_types = ["resid_pre", "mlp_out", "attn_out"]
+
+for act_type in activation_types:
+    get_activation_patch_and_display(act_type)
+
 # %%
 
 
