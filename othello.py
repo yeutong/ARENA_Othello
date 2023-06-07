@@ -73,7 +73,7 @@ if MAIN:
         OTHELLO_ROOT / "mechanistic_interpretability").resolve()
 
     # if not OTHELLO_ROOT.exists():
-    # !git clone https://github.com/likenneth/othello_world
+    #     !git clone https://github.com/likenneth/othello_world
 
 if OTHELLO_MECHINT_ROOT not in sys.path:
     sys.path.append(str(OTHELLO_MECHINT_ROOT))
@@ -723,6 +723,10 @@ def neuron_and_blank_my_emb(layer, neuron, score=None, sub_score=None, top_detec
     else:
         cross_fig.show()
 
+    # Max Activating boards
+    # acts_by_label = spectrum_data.groupby('label')['acts']
+    # top_activation_idx =   
+
 # if MAIN:
 #     layer = 5
 #     neuron = 1393
@@ -891,7 +895,7 @@ layer = 5
 cell_label = 'C1'
 ACTIVATION_THRES = 0
 # choose from ['read_blank', 'write_unemb', 'read_my', 'all']
-SCORING_METRIC = 'all'
+SCORING_METRIC = 'multiply all'
 
 if in_streamlit:
     with st.sidebar:
@@ -957,7 +961,6 @@ sub_score = {
     'read_my': score_detector_match,
 }
 
-
 if SCORING_METRIC == 'multiply all':
     score = relu(score_read_blank) * relu(score_write_unemb) * relu(score_detector_match)
 elif SCORING_METRIC == 'read_blank':
@@ -988,5 +991,74 @@ for neuron, tab in zip(top_neurons, tabs):
         neuron_and_blank_my_emb(layer, neuron.item(),
                                 score, sub_score, top_detector[neuron])
 
+# %%  
+
+
+def select_board_states(target_pos: str, target_state, board_repository=board_seqs_int):
+    target_idx = to_int(target_pos)
+    
+    for board_state in board_repository:
+        if board_state[target_pos] == target_state:
+            yield board_state
+
+
+
+
+
+
+
 
 # %%
+
+game_index = 4
+move = 20
+
+# plot_single_board(focus_games_string[game_index, :move+1], title="Original Game (black plays E0)")
+# plot_single_board(focus_games_string[game_index, :move].tolist()+[16], title="Corrupted Game (blank plays C0)")
+
+clean_input = focus_games_int[[game_index], :move+1].clone()
+corrupted_input = focus_games_int[[game_index], :move+1].clone()
+corrupted_input[0, -1] = to_int("C0")
+
+# %% 
+
+clean_logits, clean_cache = model.run_with_cache(clean_input)
+corrupted_logits, corrupted_cache = model.run_with_cache(corrupted_input)
+
+clean_log_probs = clean_logits.log_softmax(dim=-1)
+corrupted_log_probs = corrupted_logits.log_softmax(dim=-1)
+
+
+f0_index = to_int("F0")
+clean_f0_log_prob = clean_log_probs[0, -1, f0_index]
+corrupted_f0_log_prob = corrupted_log_probs[0, -1, f0_index]
+
+
+def patching_metric(patched_logits: Float[Tensor, "batch=1 seq=21 d_vocab=61"]):
+	'''
+	Function of patched logits, calibrated so that it equals 0 when performance is 
+	same as on corrupted input, and 1 when performance is same as on clean input.
+
+	Should be linear function of the logits for the F0 token at the final move.
+	'''
+	patched_log_probs = patched_logits.log_softmax(dim=-1)
+	return (patched_log_probs[0, -1, f0_index] - corrupted_f0_log_prob) / (clean_f0_log_prob - corrupted_f0_log_prob)
+# %%
+import transformer_lens.patching as patching
+
+act_patch_resid_pre = patching.get_act_patch_resid_pre(
+    model = model,
+    corrupted_tokens = corrupted_input,
+    clean_cache = clean_cache,
+    patching_metric = patching_metric
+)
+
+imshow(
+    act_patch_resid_pre, 
+    labels={"x": "Position", "y": "Layer"},
+    title="resid_pre Activation Patching",
+    width=600
+)
+# %%
+
+
