@@ -1015,21 +1015,35 @@ def board_color_to_state(board: OthelloBoardState):
     return board.state * next_hand_color
 
 
-def detect_board_match(board, target_str: int, target_pos: Tuple[int, int], target_state: str):
+def detect_board_match(board: OthelloBoardState, target_str: int, 
+                       target_pos: Tuple[int, int], target_state: str):
+    """
+    target_str: cell_int (0-60)
+    target_pos: row, col
+    target_state: 'valid', 'invalid', 'blank', 'mine', 'theirs'
+    """
+
     board_state = board_color_to_state(board)
-    
-    if target_state == 'valid' and target_str in board.get_valid_moves():
-        return True
-    if target_state == 'invalid' and target_str not in board.get_valid_moves():
-        return True
-    elif target_state == 'blank' and board_state[target_pos[0], target_pos[1]] == 0:
-        return True
-    elif target_state == 'mine' and board_state[target_pos[0], target_pos[1]] == 1:
-        return True
-    elif target_state == 'theirs' and board_state[target_pos[0], target_pos[1]] == -1:
-        return True
-    
-    return False
+
+    # Map target states to corresponding conditions
+    target_conditions = {
+        'valid': lambda: target_str in board.get_valid_moves(),
+        'invalid': lambda: target_str not in board.get_valid_moves(),
+        'blank': 0,
+        'mine': 1,
+        'theirs': -1,
+    }
+
+    assert target_state in target_conditions, "target_state should be 'valid', 'invalid', 'blank', 'mine', or 'theirs'"
+
+    condition = target_conditions.get(target_state)
+
+    # For the 'valid' and 'invalid' cases
+    if callable(condition):
+        return condition()
+    # For the 'blank', 'mine', and 'theirs' cases
+    else:
+        return board_state[target_pos[0], target_pos[1]] == condition
 
 def select_board_states(target_label: List[str], target_state: List[str], batch_size=10, games=board_seqs_string):
     """
@@ -1052,9 +1066,10 @@ def select_board_states(target_label: List[str], target_state: List[str], batch_
             board.umpire(move)
 
             if all([detect_board_match(board, *target_args) for 
-                    target_args in zip(target_str, target_pos, target_state)]): # Probably error here
+                    target_args in zip(target_str, target_pos, target_state)]):
                 n_found += 1
                 yield game_string[:idx+1]
+                
                 if n_found >= batch_size:
                     return
             
