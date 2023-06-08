@@ -238,7 +238,7 @@ class OthelloBoardState():
 
 # except:
 #     print("Making dataset")
-#     othello = get_othello(ood_num=-1, data_root=None, wthor=True)
+    # othello = get_othello(ood_num=-1, data_root=None, wthor=True)
 #     train_dataset = CharDataset(othello)
 
 # # made_othello=True

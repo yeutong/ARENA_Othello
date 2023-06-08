@@ -1045,7 +1045,8 @@ def detect_board_match(board: OthelloBoardState, target_str: int,
     else:
         return board_state[target_pos[0], target_pos[1]] == condition
 
-def select_board_states(target_label: List[str], target_state: List[str], batch_size=10, games=board_seqs_string):
+def select_board_states(target_label: List[str], target_state: List[str], pos: Optional[int] = None, 
+                        batch_size=10, game_str_gen=board_seqs_string):
     """
     target_pos: str, e.g. 'C0'
     target_state: str, ['blank', 'mine', 'theirs', 'valid', 'invalid']
@@ -1059,36 +1060,111 @@ def select_board_states(target_label: List[str], target_state: List[str], batch_
     target_pos = [(s // 8, s % 8) for s in target_str]
     n_found = 0
     
-    for game_string in games:
+    for game_string in game_str_gen:
         board = OthelloBoardState()
 
-        for idx, move in enumerate(game_string):
-            board.umpire(move)
+        if pos is None:
+            for idx, move in enumerate(game_string):
+                board.umpire(move)
+
+                if all([detect_board_match(board, *target_args) for 
+                        target_args in zip(target_str, target_pos, target_state)]):
+                    n_found += 1
+                    yield game_string[:idx+1]
+                    
+                    if n_found >= batch_size:
+                        return
+        else:
+            board.update(game_string[:pos])
 
             if all([detect_board_match(board, *target_args) for 
-                    target_args in zip(target_str, target_pos, target_state)]):
+                target_args in zip(target_str, target_pos, target_state)]):
                 n_found += 1
-                yield game_string[:idx+1]
-                
+                yield game_string[:pos]
+            
                 if n_found >= batch_size:
                     return
-            
+
+
+def yield_similar_boards(target_game_str: Int[Tensor, "seq"], sim_threshold: float, game_str_gen,
+                         batch_size=10, by_valid_moves=False):
+    target_board = OthelloBoardState()
+    target_board.update(target_game_str)
+    target_board_state = board_color_to_state(target_board)
+
+    n_found = 0
+    for board_str in game_str_gen:
+        board = OthelloBoardState()
+        board.update(board_str)
+
+        if by_valid_moves:
+            valid_moves = board.get_valid_moves()
+            target_valid_moves = target_board.get_valid_moves()
+            valid_moves_in_target = sum([float(move in target_valid_moves) for move in valid_moves])
+            similarity = valid_moves_in_target/len(target_valid_moves)
+            if similarity >= sim_threshold:
+                n_found += 1
+                print(similarity)
+                yield board_str
+        else:
+            board_state = board_color_to_state(board)
+            if (board_state == target_board_state).mean() >= sim_threshold:
+                n_found += 1
+                yield board_str
+
+        if n_found >= batch_size:
+            return
+
+import random
+
+def extend_game_string(starting_game: Int[Tensor, "seq"], final_length: int):
+    board = OthelloBoardState()
+    board.update(starting_game)
+
+    new_moves = []
+    for _ in range(final_length - starting_game.shape[0]):
+        valid_moves = board.get_valid_moves()
+        next_move = random.choice(valid_moves)
+        board.umpire(next_move)
+        new_moves.append(next_move)
+
+    return t.cat([starting_game, t.Tensor(new_moves).long()])
+
+def yield_extended_boards(starting_game: Int[Tensor, "seq"], final_length: int, batch_size=10):
+    for _ in range(batch_size):
+        yield extend_game_string(starting_game, final_length)
+
+def yield_tree_from_game_string(starting_game: Int[Tensor, "seq"], final_length: int, batch_size=10):
+    pass
 
 # selected_board_states = select_board_states(['C1', 'B2', 'A3', 'H0'], ['mine', 'valid', 'valid', 'blank'])
 # # selected_board_states_2 = select_board_states("C1", 'valid', selected_board_states)
 # game_str = next(selected_board_states)
 # plot_single_board(string_to_label(game_str))
 
-# orig_dataset = list(select_board_states(['C0'], ['valid'], batch_size=2))
-orig_dataset = list(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine'], batch_size=1))
-plot_single_board(string_to_label(orig_dataset[0]))
-alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], batch_size=1))
-plot_single_board(string_to_label(alter_dataset[0]))
+# orig_dataset = list(select_board_states(['C0'], ['valid'], batch_size=2, pos=30))
+# orig_dataset = list(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine'], batch_size=5))
+# plot_single_board(string_to_label(orig_dataset[0]))
+# alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], batch_size=5))
+# plot_single_board(string_to_label(alter_dataset[0]))
+
+orig_datapoint = next(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine']))
+plot_single_board(string_to_label(orig_datapoint))
+
+orig_extensions = yield_extended_boards(orig_datapoint[:-5], orig_datapoint.shape[0], batch_size=10000)
+alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], 
+                                         game_str_gen=orig_extensions, pos=orig_datapoint.shape[0], batch_size=1000))
+alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.8, alter_dataset, by_valid_moves=True, batch_size=1))
+# alter_dataset = list(select_board_states(['C0', 'C0'], ['blank', 'invalid'], pos=orig_datapoint.shape[0], batch_size=1000))
+# alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.5, alter_dataset, by_valid_moves=True, batch_size=1))
+
+plot_single_board(string_to_label(alter_datapoint))
+
 
 # %%
 
-clean_input = t.tensor(to_int(orig_dataset))
-corrupted_input = t.tensor(to_int(alter_dataset))
+clean_input = t.tensor(to_int(orig_datapoint))
+corrupted_input = t.tensor(to_int(alter_datapoint))
 
 # %% 
 
@@ -1120,7 +1196,8 @@ def patching_metric(patched_logits: Float[Tensor, "batch=1 seq=21 d_vocab=61"]):
 import transformer_lens.patching as patching
 
 def get_activation_patch_and_display(activation_type):
-    act_patch = getattr(patching, f'get_act_patch_{activation_type}')(
+    act_patch_fn = getattr(patching, f'get_act_patch_{activation_type}')
+    act_patch = act_patch_fn(
         model = model,
         corrupted_tokens = corrupted_input,
         clean_cache = clean_cache,
