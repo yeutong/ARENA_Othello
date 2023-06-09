@@ -47,8 +47,7 @@ os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 
 
 
-ENABLE_STREAMLIT = False # allow the script to be run in streamlit
-in_streamlit = False # whether the script is run in streamlit
+ENABLE_STREAMLIT = True # allow the script to be run in streamlit
 
 if ENABLE_STREAMLIT:
     from streamlit.runtime.scriptrunner import get_script_run_ctx # this will affect the plotly figure
@@ -56,11 +55,13 @@ if ENABLE_STREAMLIT:
     from st_pages import show_pages_from_config, add_page_title
 
     if not get_script_run_ctx():
-        in_streamlit = False
+        in_streamlit = False # whether the script is run in streamlit
     else:
         in_streamlit = True
         st.set_page_config(layout="wide")
         show_pages_from_config()
+else:
+    in_streamlit = False 
 
 # Make sure exercises are in the path
 
