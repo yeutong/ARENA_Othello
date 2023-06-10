@@ -47,7 +47,7 @@ os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 
 
 
-ENABLE_STREAMLIT = True # allow the script to be run in streamlit
+ENABLE_STREAMLIT = False # allow the script to be run in streamlit
 
 if ENABLE_STREAMLIT:
     from streamlit.runtime.scriptrunner import get_script_run_ctx # this will affect the plotly figure
@@ -1137,87 +1137,4 @@ def yield_extended_boards(starting_game: Int[Tensor, "seq"], final_length: int, 
 
 def yield_tree_from_game_string(starting_game: Int[Tensor, "seq"], final_length: int, batch_size=10):
     pass
-
-# selected_board_states = select_board_states(['C1', 'B2', 'A3', 'H0'], ['mine', 'valid', 'valid', 'blank'])
-# # selected_board_states_2 = select_board_states("C1", 'valid', selected_board_states)
-# game_str = next(selected_board_states)
-# plot_single_board(string_to_label(game_str))
-
-# orig_dataset = list(select_board_states(['C0'], ['valid'], batch_size=2, pos=30))
-# orig_dataset = list(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine'], batch_size=5))
-# plot_single_board(string_to_label(orig_dataset[0]))
-# alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], batch_size=5))
-# plot_single_board(string_to_label(alter_dataset[0]))
-
-orig_datapoint = next(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine']))
-plot_single_board(string_to_label(orig_datapoint))
-
-orig_extensions = yield_extended_boards(orig_datapoint[:-5], orig_datapoint.shape[0], batch_size=10000)
-alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], 
-                                         game_str_gen=orig_extensions, pos=orig_datapoint.shape[0], batch_size=1000))
-alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.8, alter_dataset, by_valid_moves=True, batch_size=1))
-# alter_dataset = list(select_board_states(['C0', 'C0'], ['blank', 'invalid'], pos=orig_datapoint.shape[0], batch_size=1000))
-# alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.5, alter_dataset, by_valid_moves=True, batch_size=1))
-
-plot_single_board(string_to_label(alter_datapoint))
-
-
-# %%
-
-clean_input = t.tensor(to_int(orig_datapoint))
-corrupted_input = t.tensor(to_int(alter_datapoint))
-
-# %% 
-
-clean_logits, clean_cache = model.run_with_cache(clean_input)
-corrupted_logits, corrupted_cache = model.run_with_cache(corrupted_input)
-
-clean_log_probs = clean_logits.log_softmax(dim=-1)
-corrupted_log_probs = corrupted_logits.log_softmax(dim=-1)
-
-
-answer_index = to_int("C0")
-clean_log_prob = clean_log_probs[0, -1, answer_index]
-corrupted_log_prob = corrupted_log_probs[0, -1, answer_index]
-
-
-def patching_metric(patched_logits: Float[Tensor, "batch=1 seq=21 d_vocab=61"]):
-	'''
-	Function of patched logits, calibrated so that it equals 0 when performance is 
-	same as on corrupted input, and 1 when performance is same as on clean input.
-
-	Should be linear function of the logits for the F0 token at the final move.
-	'''
-	patched_log_probs = patched_logits.log_softmax(dim=-1)
-	return (patched_log_probs[0, -1, answer_index] - corrupted_log_prob) / (clean_log_prob - corrupted_log_prob)
-
-
-
-# %%
-import transformer_lens.patching as patching
-
-def get_activation_patch_and_display(activation_type):
-    act_patch_fn = getattr(patching, f'get_act_patch_{activation_type}')
-    act_patch = act_patch_fn(
-        model = model,
-        corrupted_tokens = corrupted_input,
-        clean_cache = clean_cache,
-        patching_metric = patching_metric
-    )
-
-    imshow(
-        act_patch, 
-        labels={"x": "Position", "y": "Layer"},
-        title=f"{activation_type} Activation Patching",
-        width=600
-    ).show()
-
-
-activation_types = ["resid_pre", "mlp_out", "attn_out"]
-
-for act_type in activation_types:
-    get_activation_patch_and_display(act_type)
-
-# %%
-
 
