@@ -1,7 +1,7 @@
 import os
 import random
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union, Callable
 
 import einops
 import numpy as np
@@ -14,8 +14,11 @@ from jaxtyping import Float, Int
 from torch import Tensor
 from tqdm.notebook import tqdm
 from transformer_lens import ActivationCache, HookedTransformer, HookedTransformerConfig
+from transformer_lens.hook_points import HookPoint
+from functools import partial
 
 from plotly_utils import imshow
+import transformer_lens.patching as patching
 
 working_dir = Path(f"{os.getcwd()}").resolve()
 device = t.device("cuda" if t.cuda.is_available() else "cpu")
@@ -204,13 +207,8 @@ def select_board_states(
                     return
 
 
-def yield_similar_boards(
-    target_game_str: Int[Tensor, "seq"],
-    sim_threshold: float,
-    game_str_gen,
-    batch_size=10,
-    by_valid_moves=False,
-):
+def yield_similar_boards(target_game_str: Int[Tensor, "seq"], game_str_gen, sim_threshold: float = 0.0,
+                         batch_size=10, by_valid_moves=False, match_valid_moves_number=False):
     target_board = OthelloBoardState()
     target_board.update(target_game_str)
     target_board_state = board_color_to_state(target_board)
@@ -223,13 +221,15 @@ def yield_similar_boards(
         if by_valid_moves:
             valid_moves = board.get_valid_moves()
             target_valid_moves = target_board.get_valid_moves()
-            valid_moves_in_target = sum(
-                [float(move in target_valid_moves) for move in valid_moves]
-            )
-            similarity = valid_moves_in_target / len(target_valid_moves)
+            
+            if match_valid_moves_number and len(valid_moves) != len(target_valid_moves):
+                continue
+
+            valid_moves_in_target = sum([float(move in target_valid_moves) for move in valid_moves])
+            similarity = valid_moves_in_target/len(target_valid_moves)
             if similarity >= sim_threshold:
                 n_found += 1
-                print(similarity)
+                # print(similarity)
                 yield board_str
         else:
             board_state = board_color_to_state(board)
@@ -692,3 +692,39 @@ def plot_cosine_sim(a: str, b: str, model, blank_probe_normalised, my_probe_norm
         width=300,
     )
     return fig
+
+
+def patching_metric(patched_logits: Float[Tensor, "batch seq d_vocab"], pos, answer_index, corrupted_log_prob, clean_log_prob):
+	'''
+	Function of patched logits, calibrated so that it equals 0 when performance is 
+	same as on corrupted input, and 1 when performance is same as on clean input.
+
+	Should be linear function of the logits for the F0 token at the final move.
+	'''
+	patched_log_probs = patched_logits.log_softmax(dim=-1)
+	return (patched_log_probs[0, pos, answer_index] - corrupted_log_prob) / (clean_log_prob - corrupted_log_prob)
+
+def neuron_patch(activations: Float[Tensor, 'batch seq neuron'], hook: HookPoint, 
+                 index: Union[List, Int, Int[Tensor, 'd_mlp']], pos: int, clean_cache=ActivationCache) -> Float[Tensor, 'batch seq neuron']:
+    activations[:, pos, index] = clean_cache['post', hook.layer()][:, pos, index]
+    return activations
+
+
+def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tensor, "batch seq"],
+                           clean_cache: ActivationCache, patching_metric: Callable, answer_index, 
+                           corrupted_log_prob, clean_log_prob, layer=5, pos=-1,
+                           ) -> Float[Tensor, 'pos neuron']:
+    layer = [layer] if isinstance(layer, int) else layer
+
+    model.reset_hooks()
+    result = t.zeros(len(layer), model.cfg.d_mlp).to(model.cfg.device)
+
+    for idx, lay in enumerate(layer):
+        for neuron in tqdm(range(model.cfg.d_mlp)):
+            neuron_hook = partial(neuron_patch, index=neuron, clean_cache=clean_cache, pos=pos)
+            patched_logits = model.run_with_hooks(
+                corrupted_tokens, fwd_hooks=[(utils.get_act_name('post', lay), neuron_hook)])
+            result[idx, neuron] = patching_metric(patched_logits, pos, answer_index, corrupted_log_prob, clean_log_prob)
+
+    return result.squeeze()
+
