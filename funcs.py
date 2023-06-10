@@ -530,12 +530,13 @@ def neuron_and_blank_my_emb(
         spectrum_data,
         x="acts",
         color="label",
-        histnorm="percent",
+        # histnorm="percent",
         barmode="group",
         nbins=100,
         title=f"Spectrum plot for neuron L{layer}N{neuron}",
         color_discrete_sequence=px.colors.qualitative.Bold,
         height=350,
+        log_y=True,
     )
 
     confusion_matrix = pd.crosstab(
@@ -728,3 +729,58 @@ def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tenso
 
     return result.squeeze()
 
+def gen_label_state(
+    need_blank: List[str],
+    need_theirs: List[str],
+    need_mine: List[str],
+):
+    """
+    need_blank: List[str], e.g. ['A0', 'A1']
+    need_theirs: List[str], e.g. ['A2', 'A3']
+    need_mine: List[str], e.g. ['A4', 'A5']
+    """
+    assert all(
+        to_int(label) not in [27, 28, 35, 36] for label in need_blank + need_theirs + need_mine
+    ), "the four center squares are not allowed"
+
+    target_label = need_blank + need_theirs + need_mine
+    target_state = ["blank"] * len(need_blank) + ["theirs"] * len(need_theirs) + ["mine"] * len(need_mine)
+
+    return target_label, target_state
+
+def gen_pattern(
+    target_label: List[str],
+    target_state: List[str],
+):
+    pattern = t.full((8, 8), t.nan).to(device)
+
+    state2num = {"blank": 0, "theirs": -1, "mine": 1}
+    for label, state in zip(target_label, target_state):
+        cell_idx = to_string(label)
+        r, c = cell_idx // 8, cell_idx % 8
+        pattern[r, c] = state2num[state]
+
+    return pattern
+
+
+def match_state_pattern(
+    flipped_states: Float[Tensor, "games moves 8 8"], pattern: Float[Tensor, "8 8"]
+):
+    match = flipped_states == pattern[None, None, :, :]
+    nan_place = pattern[None, None, :, :].isnan()
+    return (match | nan_place).all(dim=-1).all(dim=-1)
+
+
+def act_distribution_diff_given_pattern(neuron_act, match):
+    """
+    neuron_act: shape: [num_of_games, num_of_moves(59), 2048]
+    match: shape: [num_of_games, num_of_moves(59)]
+    """
+    act_on_matched_pattern = neuron_act[match]  # shape: [num_of_matched_seq, 2048]
+    act_on_unmatched_pattern = neuron_act[~match]  # shape: [num_of_unmatched_seq, 2048]
+
+    dist_diff = (
+        act_on_matched_pattern.mean(dim=0) - act_on_unmatched_pattern.mean(dim=0)
+    ) / act_on_unmatched_pattern.std(dim=0)
+
+    return dist_diff

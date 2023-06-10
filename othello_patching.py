@@ -1161,20 +1161,9 @@ for datapoint in select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mi
     alter_dataset = list(yield_similar_boards(datapoint, selected_board_states, sim_threshold=0.0, 
                                               by_valid_moves=True, match_valid_moves_number=True, batch_size=25))
     if alter_dataset != []:
-        orig_datapoint = t.Tensor(to_int(datapoint))
-        alter_datapoint = t.Tensor(to_int(alter_dataset[0]))
-        
-        clean_input.append(t.nn.functional.pad(orig_datapoint, (0, 59 - orig_datapoint.shape[0])))
-        corrupted_input.append(t.nn.functional.pad(alter_datapoint, (0, 59 - alter_datapoint.shape[0])))
-        end_position.append(datapoint.shape[0])
-        
-        n_found += 1 
-        if n_found >= final_batch_size:
-            break
+        orig_datapoint = datapoint
+        alter_datapoint = alter_dataset[0]
 
-clean_input = t.stack(clean_input).long().to(model.cfg.device)
-corrupted_input = t.stack(corrupted_input).long().to(model.cfg.device)
-end_position = t.Tensor(end_position).long().to(model.cfg.device)
 
 
 # alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.8, alter_dataset, by_valid_moves=True, batch_size=1))
