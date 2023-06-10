@@ -1240,6 +1240,7 @@ def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tenso
                            clean_cache: ActivationCache, patching_metric: Callable, layer=5, pos=-1) -> Float[Tensor, 'pos neuron']:
     layer = [layer] if isinstance(layer, int) else layer
 
+    model.reset_hooks()
     result = t.zeros(len(layer), model.cfg.d_mlp).to(model.cfg.device)
 
     for idx, lay in enumerate(layer):
@@ -1252,20 +1253,64 @@ def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tenso
     return result.squeeze()
 
 # %%
-layers_to_patch = [3, 4, 5, 6, 7]
-act_patch = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, layer=layers_to_patch, pos=pos)
-# %%
-
-for i, lay in enumerate(layers_to_patch):
-    px.histogram(utils.to_numpy(act_patch[i]), nbins=100, width=600, log_y=True,
-                 title=f"MLP Post Activation Patching L{lay}").show()
 
 # %%
 
-top_neurons = act_patch.argsort(descending=True, dim=-1)[:10]
-layer_idx = []
+# layers_to_patch = [5, 6, 7]
+# act_patch = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, layer=layers_to_patch, pos=pos)
+
+# for i, lay in enumerate(layers_to_patch):
+#     px.histogram(utils.to_numpy(act_patch[i]), nbins=100, width=600, log_y=True,
+#                  title=f"MLP Post Activation Patching L{lay}").show()
+
+# %%
+
+def calculate_uniform_loss(model: HookedTransformer, game_string):
+    # TODO: Calculate the loss at every move (instead of only at the end)
+    valid_moves_list = []
+    tokens_list = []
+    for game in game_string:
+        if game.shape[0] == 60:
+            continue
+        board = OthelloBoardState()
+        board.update(game)
+        tokens_list.append(t.Tensor(to_int(game)).long().to(model.cfg.device))
+        valid_moves_list.append(to_int(board.get_valid_moves()))
+
+    tokens = t.stack(tokens_list)
+    logits = model(tokens)
+    log_probs = logits.log_softmax(dim=-1)
+
+    loss = 0
+    for valid_move, log_prob in zip(valid_moves_list, log_probs):
+        loss += -log_prob[-1, valid_move].mean()
+
+    return loss/len(game_string)
+    
+# loss = calculate_uniform_loss(model, focus_games_string[:, :-1])
+# print(loss)
+ # %%
+
+layer = 5
+act_patch = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, layer=layer, pos=pos)
+top_neurons = act_patch.argsort(descending=True)[:5]
+
+C0_dataset = select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine'], batch_size=20)
+others_dataset = select_board_states(['C0'], ['invalid'], batch_size=20)
+
+# Before patching
+loss_C0 = calculate_uniform_loss(model, C0_dataset)
+loss_others = calculate_uniform_loss(model, others_dataset)
+print(f'{loss_C0=:.4f}, {loss_others=:.4f}')
+
 top_neurons_patch = partial(neuron_patch, index=top_neurons, clean_cache=clean_cache, pos=pos)
+model.add_hook(utils.get_act_name('post', layer), top_neurons_patch)
 
-logits_patch = model.run_with_hooks(corrupted_input, fwd_hooks=[(utils.get_act_name('post', 5), top_neurons_patch)])
+patched_loss_C0 = calculate_uniform_loss(model, C0_dataset)
+patched_loss_others = calculate_uniform_loss(model, others_dataset)
+print(f'{patched_loss_C0=:.4f}, {patched_loss_others=:.4f}')
 
-def 
+model.reset_hooks()
+
+
+# logits_patch = model.run_with_hooks(corrupted_input, fwd_hooks=[(utils.get_act_name('post', 5), top_neurons_patch)])
