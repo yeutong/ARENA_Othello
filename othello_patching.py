@@ -1156,6 +1156,7 @@ for datapoint in select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mi
     if alter_dataset != []:
         orig_datapoint = datapoint
         alter_datapoint = alter_dataset[0]
+        break
 
 
 

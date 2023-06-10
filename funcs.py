@@ -530,12 +530,13 @@ def neuron_and_blank_my_emb(
         spectrum_data,
         x="acts",
         color="label",
-        histnorm="percent",
+        # histnorm="percent",
         barmode="group",
         nbins=100,
         title=f"Spectrum plot for neuron L{layer}N{neuron}",
         color_discrete_sequence=px.colors.qualitative.Bold,
         height=350,
+        log_y=True,
     )
 
     confusion_matrix = pd.crosstab(

@@ -22,13 +22,17 @@ from funcs import (
     yield_extended_boards,
     get_act_patch_mlp_post,
     patching_metric,
+
 )
 from othello_world.mechanistic_interpretability.mech_interp_othello_utils import (
     OthelloBoardState,
     string_to_label,
     to_int,
+    plot_single_board,
 )
 
+# %%
+t.set_grad_enabled(False)
 stoi_indices = [i for i in range(64) if i not in [27, 28, 35, 36]]
 
 # Define our rows, and the function that converts an index into a (row, column) label, e.g. `E2`
@@ -260,60 +264,71 @@ score_detector_match, top_detector = cal_score_read_my(w_in_L5_my, cell)
 
 
 # calculating patching score
-for datapoint in select_board_states(["C0", "D1", "E2"], ["valid", "theirs", "mine"], pos=None, batch_size=1000, game_str_gen=board_seqs_string):
-    orig_extensions = yield_extended_boards(
-        datapoint[:-1], datapoint.shape[0], batch_size=100
-    )
-    selected_board_states = select_board_states(
-        ["C0", "C0"],
-        ["blank", "invalid"],
-        game_str_gen=orig_extensions,
-        pos=datapoint.shape[0],
-        batch_size=25,
-    )
-    alter_dataset = list(
-        yield_similar_boards(
-            datapoint,
-            selected_board_states,
-            sim_threshold=0.0,
-            by_valid_moves=True,
-            match_valid_moves_number=True,
+if SCORING_METRIC == "Patching":
+    for datapoint in select_board_states(["C0", "D1", "E2"], ["valid", "theirs", "mine"], pos=None, batch_size=1000, game_str_gen=board_seqs_string):
+        print('inside datapoint loop')
+        orig_extensions = yield_extended_boards(
+            datapoint[:-1], datapoint.shape[0], batch_size=25
+        )
+        selected_board_states = select_board_states(
+            ["C0", "C0"],
+            ["blank", "invalid"],
+            game_str_gen=orig_extensions,
+            pos=datapoint.shape[0],
             batch_size=25,
         )
+        alter_dataset = list(
+            yield_similar_boards(
+                datapoint,
+                selected_board_states,
+                sim_threshold=0.0,
+                by_valid_moves=True,
+                match_valid_moves_number=True,
+                batch_size=25,
+            )
+        )
+        if alter_dataset != []:
+            orig_datapoint = datapoint
+            alter_datapoint = alter_dataset[0]
+            break
+
+    
+    clean_input = t.tensor(to_int(orig_datapoint))
+    corrupted_input = t.tensor(to_int(alter_datapoint))
+
+    clean_logits, clean_cache = model.run_with_cache(clean_input)
+    corrupted_logits, corrupted_cache = model.run_with_cache(corrupted_input)
+
+    clean_log_probs = clean_logits.log_softmax(dim=-1)
+    corrupted_log_probs = corrupted_logits.log_softmax(dim=-1)
+
+
+    pos = -1
+
+    answer_index = to_int("C0")
+    clean_log_prob = clean_log_probs[0, pos, answer_index]
+    corrupted_log_prob = corrupted_log_probs[0, pos, answer_index]
+
+    print('Everything is fine, prepared to patch')
+    act_patch = get_act_patch_mlp_post(
+        model,
+        corrupted_input,
+        clean_cache,
+        patching_metric,
+        answer_index,
+        corrupted_log_prob,
+        clean_log_prob,
+        layer=layer,
+        pos=pos,
     )
-    if alter_dataset != []:
-        orig_datapoint = datapoint
-        alter_datapoint = alter_dataset[0]
 
 
-clean_input = t.tensor(to_int(orig_datapoint))
-corrupted_input = t.tensor(to_int(alter_datapoint))
+    col1, col2 = st.columns(2)
+    col1.write('Clean board')
+    col1.plotly_chart(plot_single_board(string_to_label(orig_datapoint), return_fig=True), aspect='equal')
+    col2.write('Corrupt board')
+    col2.plotly_chart(plot_single_board(string_to_label(alter_datapoint), return_fig=True), aspect='equal')
 
-clean_logits, clean_cache = model.run_with_cache(clean_input)
-corrupted_logits, corrupted_cache = model.run_with_cache(corrupted_input)
-
-clean_log_probs = clean_logits.log_softmax(dim=-1)
-corrupted_log_probs = corrupted_logits.log_softmax(dim=-1)
-
-# %%
-
-pos = -1
-
-answer_index = to_int("C0")
-clean_log_prob = clean_log_probs[0, pos, answer_index]
-corrupted_log_prob = corrupted_log_probs[0, pos, answer_index]
-
-act_patch = get_act_patch_mlp_post(
-    model,
-    corrupted_input,
-    clean_cache,
-    patching_metric,
-    answer_index,
-    corrupted_log_prob,
-    clean_log_prob,
-    layer=layer,
-    pos=pos,
-)
 
 # act_patch shape: [d_mlp]
 # top_neurons = act_patch.argsort(descending=True)[:5]
@@ -351,12 +366,20 @@ elif SCORING_METRIC == "Patching":
 elif SCORING_METRIC == "Random":
     score = t.rand_like(score_read_blank)
 
-n_top_neurons = 3
+n_top_neurons = 10
 top_neurons = score.argsort(descending=True)[:n_top_neurons]
 
 # visualize the input and output weights for these neurons
 tabs = st.tabs([f"L{layer}N{neuron}" for neuron in top_neurons])
 for neuron, tab in zip(top_neurons, tabs):
+    if SCORING_METRIC == "Patching":
+        detector = t.full((8, 8), t.nan).to(device)
+        detector[2, 0] = 0
+        detector[3, 1] = -1
+        detector[4, 2] = 1
+    else:
+        detector = top_detector[neuron]
+
     with tab:
         neuron_and_blank_my_emb(
             layer,
@@ -369,7 +392,7 @@ for neuron, tab in zip(top_neurons, tabs):
             ACTIVATION_THRES,
             score,
             sub_score,
-            top_detector[neuron],
+            detector,
         )
 
 
