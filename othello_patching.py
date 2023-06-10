@@ -89,6 +89,8 @@ if OTHELLO_MECHINT_ROOT not in sys.path:
     sys.path.append(str(OTHELLO_MECHINT_ROOT))
 
 from mech_interp_othello_utils import plot_board, plot_single_board, plot_board_log_probs, to_string, to_int, int_to_label, string_to_label, OthelloBoardState
+
+t.set_grad_enabled(False)
 # %% 1️⃣ MODEL SETUP & LINEAR PROBES
 
 
@@ -1087,8 +1089,9 @@ def select_board_states(target_label: List[str], target_state: List[str], pos: O
                     return
 
 
-def yield_similar_boards(target_game_str: Int[Tensor, "seq"], sim_threshold: float, game_str_gen,
-                         batch_size=10, by_valid_moves=False):
+
+def yield_similar_boards(target_game_str: Int[Tensor, "seq"], game_str_gen, sim_threshold: float = 0.0,
+                         batch_size=10, by_valid_moves=False, match_valid_moves_number=False):
     target_board = OthelloBoardState()
     target_board.update(target_game_str)
     target_board_state = board_color_to_state(target_board)
@@ -1101,6 +1104,10 @@ def yield_similar_boards(target_game_str: Int[Tensor, "seq"], sim_threshold: flo
         if by_valid_moves:
             valid_moves = board.get_valid_moves()
             target_valid_moves = target_board.get_valid_moves()
+            
+            if match_valid_moves_number and len(valid_moves) != len(target_valid_moves):
+                continue
+
             valid_moves_in_target = sum([float(move in target_valid_moves) for move in valid_moves])
             similarity = valid_moves_in_target/len(target_valid_moves)
             if similarity >= sim_threshold:
@@ -1140,18 +1147,26 @@ def yield_tree_from_game_string(starting_game: Int[Tensor, "seq"], final_length:
 
 # %%
 
-# orig_datapoint = next(select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine']))
-orig_datapoint = focus_games_string[4, :20+1].clone()
+for datapoint in select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mine']):
+    orig_extensions = yield_extended_boards(datapoint[:-1], datapoint.shape[0], batch_size=25)
+    selected_board_states = select_board_states(['C0', 'C0'], ['blank', 'invalid'], 
+                                            game_str_gen=orig_extensions, pos=datapoint.shape[0], batch_size=25)
+    alter_dataset = list(yield_similar_boards(datapoint, selected_board_states, sim_threshold=0.0, 
+                                              by_valid_moves=True, match_valid_moves_number=True, batch_size=25))
+    if alter_dataset != []:
+        orig_datapoint = datapoint
+        alter_datapoint = alter_dataset[0]
 
 
-# orig_extensions = yield_extended_boards(orig_datapoint[:-5], orig_datapoint.shape[0], batch_size=10000)
-# alter_dataset = list(select_board_states(['C0', 'C0', 'E2'], ['blank', 'invalid', 'mine'], 
-#                                          game_str_gen=orig_extensions, pos=orig_datapoint.shape[0], batch_size=1000))
+
 # alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.8, alter_dataset, by_valid_moves=True, batch_size=1))
 # alter_dataset = list(select_board_states(['C0', 'C0'], ['blank', 'invalid'], pos=orig_datapoint.shape[0], batch_size=1000))
 # alter_datapoint = next(yield_similar_boards(orig_datapoint, 0.5, alter_dataset, by_valid_moves=True, batch_size=1))
-alter_datapoint = orig_datapoint.clone()
-alter_datapoint[-1] = to_string("C0")
+
+
+# orig_datapoint = focus_games_string[4, :20+1].clone()
+# alter_datapoint = orig_datapoint.clone()
+# alter_datapoint[-1] = to_string("C0")
 
 
 plot_single_board(string_to_label(orig_datapoint))
@@ -1163,21 +1178,22 @@ plot_single_board(string_to_label(alter_datapoint))
 clean_input = t.tensor(to_int(orig_datapoint))
 corrupted_input = t.tensor(to_int(alter_datapoint))
 
-# %% 
-
 clean_logits, clean_cache = model.run_with_cache(clean_input)
 corrupted_logits, corrupted_cache = model.run_with_cache(corrupted_input)
 
 clean_log_probs = clean_logits.log_softmax(dim=-1)
 corrupted_log_probs = corrupted_logits.log_softmax(dim=-1)
 
+# %%
 
-answer_index = to_int("F0")
-clean_log_prob = clean_log_probs[0, -1, answer_index]
-corrupted_log_prob = corrupted_log_probs[0, -1, answer_index]
+pos = -1
+
+answer_index = to_int("C0")
+clean_log_prob = clean_log_probs[0, pos, answer_index]
+corrupted_log_prob = corrupted_log_probs[0, pos, answer_index]
 
 
-def patching_metric(patched_logits: Float[Tensor, "batch seq d_vocab"]):
+def patching_metric(patched_logits: Float[Tensor, "batch seq d_vocab"], ):
 	'''
 	Function of patched logits, calibrated so that it equals 0 when performance is 
 	same as on corrupted input, and 1 when performance is same as on clean input.
@@ -1185,11 +1201,9 @@ def patching_metric(patched_logits: Float[Tensor, "batch seq d_vocab"]):
 	Should be linear function of the logits for the F0 token at the final move.
 	'''
 	patched_log_probs = patched_logits.log_softmax(dim=-1)
-	return (patched_log_probs[0, -1, answer_index] - corrupted_log_prob) / (clean_log_prob - corrupted_log_prob)
+	return (patched_log_probs[0, pos, answer_index] - corrupted_log_prob) / (clean_log_prob - corrupted_log_prob)
 
 
-
-# %%
 import transformer_lens.patching as patching
 
 def get_activation_patch_and_display(activation_type):
@@ -1217,23 +1231,41 @@ for act_type in activation_types:
 # %%
 
 def neuron_patch(activations: Float[Tensor, 'batch seq neuron'], hook: HookPoint, 
-                 index=Union[List, Int], clean_cache=ActivationCache) -> Float[Tensor, 'batch seq neuron']:
-    activations[..., index] = clean_cache['post', hook.layer()][..., index]
+                 index: Union[List, Int, Int[Tensor, 'd_mlp']], pos: int, clean_cache=ActivationCache) -> Float[Tensor, 'batch seq neuron']:
+    activations[:, pos, index] = clean_cache['post', hook.layer()][:, pos, index]
     return activations
 
 
 def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tensor, "batch seq"],
                            clean_cache: ActivationCache, patching_metric: Callable, layer=5, pos=-1) -> Float[Tensor, 'pos neuron']:
     layer = [layer] if isinstance(layer, int) else layer
-    pos = [pos] if isinstance(pos, int) else pos
 
-    result = t.zeros(len(pos), len(layer), model.cfg.d_mlp).to(model.cfg.device)
+    result = t.zeros(len(layer), model.cfg.d_mlp).to(model.cfg.device)
 
-    for pos_idx in pos:
-        for layer_idx in layer:
-            for neuron in range(model.cfg.d_mlp):
-                neuron_hook = partial(neuron_patch, index=neuron, clean_cache=clean_cache)
-                patched_logits, _ = model.run_with_cache(
-                    corrupted_tokens, fwd_hooks=[(utils.get_act_name('post', layer_idx), neuron_hook)])
-                result[pos_idx, layer_idx, neuron] = patching_metric(patched_logits)
-            
+    for idx, lay in enumerate(layer):
+        for neuron in tqdm(range(model.cfg.d_mlp)):
+            neuron_hook = partial(neuron_patch, index=neuron, clean_cache=clean_cache, pos=pos)
+            patched_logits = model.run_with_hooks(
+                corrupted_tokens, fwd_hooks=[(utils.get_act_name('post', lay), neuron_hook)])
+            result[idx, neuron] = patching_metric(patched_logits)
+
+    return result.squeeze()
+
+# %%
+layers_to_patch = [3, 4, 5, 6, 7]
+act_patch = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, layer=layers_to_patch, pos=pos)
+# %%
+
+for i, lay in enumerate(layers_to_patch):
+    px.histogram(utils.to_numpy(act_patch[i]), nbins=100, width=600, log_y=True,
+                 title=f"MLP Post Activation Patching L{lay}").show()
+
+# %%
+
+top_neurons = act_patch.argsort(descending=True, dim=-1)[:10]
+layer_idx = []
+top_neurons_patch = partial(neuron_patch, index=top_neurons, clean_cache=clean_cache, pos=pos)
+
+logits_patch = model.run_with_hooks(corrupted_input, fwd_hooks=[(utils.get_act_name('post', 5), top_neurons_patch)])
+
+def 

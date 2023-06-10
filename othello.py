@@ -47,7 +47,7 @@ os.environ["ACCELERATE_DISABLE_RICH"] = "1"
 
 
 
-ENABLE_STREAMLIT = False # allow the script to be run in streamlit
+ENABLE_STREAMLIT = True # allow the script to be run in streamlit
 
 if ENABLE_STREAMLIT:
     from streamlit.runtime.scriptrunner import get_script_run_ctx # this will affect the plotly figure
