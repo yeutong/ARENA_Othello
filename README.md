@@ -1,1 +1,1 @@
-run `streamlit run othello.py`
+run `streamlit run app.py`

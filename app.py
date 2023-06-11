@@ -358,19 +358,19 @@ def get_custom_pattern():
         col1, col2, col3 = st.columns(3)
         with col1:
             need_blank = st.multiselect(
-                'What cells need to be blank?',
+                'Which cells need to be blank?',
                 [f"{alp}{num}" for alp in "ABCDEFGH" for num in range(8)],
                 ['C0']
             )
         with col2:
             need_theirs = st.multiselect(
-                'What cells need to be theirs?',
+                'Which cells need to be theirs?',
                 [f"{alp}{num}" for alp in "ABCDEFGH" for num in range(8)],
                 ['D1']
             )
         with col3:
             need_mine = st.multiselect(
-                'What cells need to be mine?',
+                'Which cells need to be mine?',
                 [f"{alp}{num}" for alp in "ABCDEFGH" for num in range(8)],
                 ['E2']
             )
