@@ -430,7 +430,7 @@ elif SCORING_METRIC == "Neuron input weight match pattern":
 
 
 
-n_top_neurons = 10
+n_top_neurons = 15
 top_neurons = score.argsort(descending=True)[:n_top_neurons]
 
 

@@ -246,6 +246,7 @@ if MAIN:
 #         title="First 16 moves of first game",
 #         color_continuous_scale="Greys",
 #     )
+
 # %%
 # @st.cache_data
 
@@ -1180,7 +1181,7 @@ for datapoint in select_board_states(['C0', 'D1', 'E2'], ['valid', 'theirs', 'mi
 
 clean_input = pad_and_stack(clean_input, lenght=59).long()
 corrupted_input = pad_and_stack(corrupted_input, lenght=59).long()
-
+end_position = t.tensor(end_position).long()
 
 answer_index = to_int("C0")
 clean_logits, clean_cache = model.run_with_cache(clean_input)
@@ -1211,6 +1212,7 @@ def patching_metric(patched_log_probs: Float[Tensor, "batch"], corrupted_log_pro
 
 	Should be linear function of the logits for the F0 token at the final move.
 	'''
+	# print(patched_log_probs, corrupted_log_probs, clean_log_probs, sep='\n')
 	return (patched_log_probs - corrupted_log_probs) / (clean_log_probs - corrupted_log_probs)
 	# return patched_log_probs
 
@@ -1245,20 +1247,31 @@ def patching_metric(patched_log_probs: Float[Tensor, "batch"], corrupted_log_pro
 def neuron_patch(activations: Float[Tensor, 'batch seq neuron'], hook: HookPoint, 
                  index, pos, clean_cache: ActivationCache, batch_idx=None) -> Float[Tensor, 'batch seq neuron']:
     batch_idx = t.arange(activations.shape[0]) if batch_idx is None else batch_idx
-    activations[batch_idx, pos, index] = clean_cache['post', hook.layer()][batch_idx, pos, index]
+    # activations[batch_idx, pos, index] = clean_cache['post', hook.layer()][batch_idx, pos, index]
+
+    for idx, pos_idx in zip(batch_idx, pos):
+        activations[idx, pos_idx, index] = clean_cache['post', hook.layer()][idx, pos_idx, index]
+
     # activations[batch_idx, pos, index] = 0
     return activations
 
 def zero_ablate_neuron(activations: Float[Tensor, 'batch seq neuron'], hook: HookPoint, 
                  index, pos, clean_cache: ActivationCache, batch_idx=None) -> Float[Tensor, 'batch seq neuron']:
     batch_idx = t.arange(activations.shape[0]) if batch_idx is None else batch_idx
-    activations[batch_idx, pos, index].fill_(0)
+    # activations[batch_idx, pos, index].fill_(0)
+
+    for idx, pos_idx in zip(batch_idx, pos):
+        activations[idx, pos_idx, index].fill_(0)
+    
+    # activations[:, :, index].fill_(0)
     return activations
 
 
 def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tensor, "batch seq"],
-                           clean_cache: ActivationCache, patching_metric: Callable, clean_logits: Float[Tensor, 'batch seq vocab'],
-                           layer=5, pos=-1, batch_idx=None) -> Float[Tensor, 'pos neuron']:
+                           clean_cache: ActivationCache, patching_metric: Callable, clean_tokens: Float[Tensor, 'batch seq'],
+                           layer=5, pos=-1, batch_idx=None, neurons=None) -> Float[Tensor, 'pos neuron']:
+
+    clean_logits = model(clean_tokens)
     layer = [layer] if isinstance(layer, int) else layer
     batch_size = corrupted_tokens.shape[0]
     batch_idx = t.arange(batch_size) if batch_idx is None else batch_idx
@@ -1268,16 +1281,22 @@ def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tenso
     clean_log_probs = clean_logits.log_softmax(dim=-1)[batch_idx, pos, answer_index]
 
 
+    if neurons is None:
+        neurons = range(model.cfg.d_mlp)
+    else:
+        neurons = [neurons] if isinstance(neurons, int) else neurons
+
     model.reset_hooks()
-    result = t.zeros(batch_size, len(layer), model.cfg.d_mlp).to(model.cfg.device)
+    result = t.zeros(batch_size, len(layer), len(neurons)).to(model.cfg.device)
+
 
     for idx, lay in enumerate(layer):
-        for neuron in tqdm(range(model.cfg.d_mlp)):
+        for neuron_idx, neuron in tqdm(enumerate(neurons)):
             neuron_hook = partial(neuron_patch, index=neuron, clean_cache=clean_cache, pos=pos, batch_idx=batch_idx)
             patched_logits = model.run_with_hooks(
                 corrupted_tokens, fwd_hooks=[(utils.get_act_name('post', lay), neuron_hook)])
             patched_log_probs = patched_logits.log_softmax(dim=-1)[batch_idx, pos, answer_index]
-            result[:, idx, neuron] = patching_metric(patched_log_probs, corrupted_log_probs, clean_log_probs)
+            result[:, idx, neuron_idx] = patching_metric(patched_log_probs, corrupted_log_probs, clean_log_probs)
 
     model.reset_hooks()
     return result
@@ -1286,24 +1305,80 @@ def get_act_patch_mlp_post(model: HookedTransformer, corrupted_tokens: Int[Tenso
 
 model.reset_hooks(including_permanent=True)
 
-layers_to_patch = [6, 7]
-# layers_to_patch = [7]
-act_patch = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, clean_logits,layer=layers_to_patch,
-                                pos=end_position)
+# layers_to_patch = [5, 6]
+layers_to_patch = [5,6,7]
+neuron_to_patch = None
+act_patch = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, clean_input,layer=layers_to_patch,
+                                pos=end_position, neurons=neuron_to_patch)
 
-top_neurons_patch = partial(zero_ablate_neuron, index=slice(None), clean_cache=clean_cache, pos=end_position)
-model.add_hook(utils.get_act_name('post', 5, 'mlp'), top_neurons_patch, is_permanent=True)
+# top_neurons_patch = partial(zero_ablate_neuron, index=1393, clean_cache=clean_cache, pos=end_position)
+# model.add_hook(utils.get_act_name('post', 5, 'mlp'), top_neurons_patch, is_permanent=True)
+
+neuron_hook = partial(zero_ablate_neuron, index=slice(None), pos=end_position, clean_cache=None, batch_idx=t.arange(10))
+model.add_hook(utils.get_act_name('mlp_post', 5), neuron_hook, is_permanent=True)
 
 # layers_to_patch = [7]
-act_patch_hook = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, clean_logits,layer=layers_to_patch,
+act_patch_hook = get_act_patch_mlp_post(model, corrupted_input, clean_cache, patching_metric, clean_input,layer=layers_to_patch,
                                 pos=end_position)
 
 model.reset_hooks(including_permanent=True)
 
-
+# %%
+import plotly.graph_objects as go
 for i, lay in enumerate(layers_to_patch):
     px.histogram(utils.to_numpy(act_patch.mean(0)[i]), nbins=100, width=600, log_y=True,
-                 title=f"MLP Post Activation Patching L{lay}").show()
+                 title=f"MLP Post Activation Patching L{lay}", 
+                 labels={'value': 'Logit difference in patching experiment', 'y': 'Log neuron count'}).show()
+
+x_range = [-0.2, 0.2]
+patch_effect1 = act_patch.mean(dim=(0, 1))
+patch_effect2 = act_patch_hook.mean(dim=(0, 1))
+
+fig = px.scatter(x = utils.to_numpy(patch_effect1), y = utils.to_numpy(patch_effect2), hover_data=[range(2048)])
+fig.add_trace(go.Scatter(x=x_range, y=x_range, mode='lines', name='y=x'))
+# fig.update_xaxes(range=x_range)
+# fig.update_yaxes(range=x_range)
+fig.show()
+
+# %%
+# ===================================================
+# testing back-up neuron hypothesis
+# 0. record activation of L6N700 on clean run
+
+pairs = [(5, 1393), (6, 700)]
+# pairs = [(4, 942), (5, 1614)]
+l1, n1 = pairs[0]
+l2, n2 = pairs[1]
+
+model.reset_hooks(including_permanent=True)
+_, tmp_cache = model.run_with_cache(clean_input)
+act = tmp_cache['mlp_post', l2][range(10), end_position, n2]
+print(act)
+
+
+# 1. add permanent hook to L5N1393 (zero ablating)
+neuron_hook = partial(zero_ablate_neuron, index=n1, pos=end_position, clean_cache=None, batch_idx=t.arange(10))
+model.add_hook(utils.get_act_name('mlp_post', l1), neuron_hook, is_permanent=True)
+
+# 2. run clean input again, record activation of L6N700
+tmp_logits, tmp_cache = model.run_with_cache(clean_input)
+act2 = tmp_cache['mlp_post', l2][range(10), end_position, n2]
+
+px.scatter(x = utils.to_numpy(act), y = utils.to_numpy(act2)).show()
+
+# 3. remove permanent hook
+model.reset_hooks(including_permanent=True)
+
+# ===================================================
+L6N700_wout = model.W_out[6, 700]
+WU_C0 = model.W_U[:, to_int('C0')]
+
+sum(L6N700_wout * WU_C0)
+
+# %%
+
+# %%
+
 
 
 # %%
