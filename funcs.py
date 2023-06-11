@@ -659,6 +659,19 @@ def cal_score_read_my(
     # assert score.shape == (d_mlp,)
     return top_score, detectors[top_idx]
 
+def cal_score_read_my_given_pattern(
+    w_in_my: Float[Tensor, "d_mlp row col"],
+    pattern: Float[Tensor, "row col"],
+):
+    w_in_my_norm = w_in_my / w_in_my.norm(dim=(1, 2), keepdim=True)
+    pattern_num = t.nan_to_num(pattern, nan=0.0)
+    pattern_norm = (
+        pattern_num / pattern_num.norm()
+    )  # shape: [8, 8]
+    score = einops.einsum(
+        w_in_my_norm, pattern_norm, "d_mlp row col, row col -> d_mlp"
+    )
+    return score
 
 def plot_cosine_sim(a: str, b: str, model, blank_probe_normalised, my_probe_normalised):
     """
