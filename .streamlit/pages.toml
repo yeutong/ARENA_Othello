@@ -2,8 +2,3 @@
 path = "othello.py"
 name = "Main Analysis"
 icon = "🪔"
-
-[[pages]]
-path = "notes.py"
-name = "Notes"
-icon = "📒"

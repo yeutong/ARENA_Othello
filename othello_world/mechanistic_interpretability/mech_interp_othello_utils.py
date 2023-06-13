@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from functools import partial
+from transformer_lens.utils import to_numpy
 
 from neel_plotly import imshow
 
@@ -733,6 +734,7 @@ def plot_board_log_probs(moves, logits, return_fig=False, use_counters=False):
             for i in range(len(moves))
         ],
         animation_name="Move",
+        template='plotly'
     )
     fig = fig.update_layout(title_x=0.5)
     # fig.update_traces(text=[[str(i+8*j) for i in range(8)] for j in range(8)], texttemplate="%{text}")

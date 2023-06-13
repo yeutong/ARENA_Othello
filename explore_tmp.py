@@ -42,6 +42,7 @@ import plotly.express as px
 # import streamlit as st
 import torch as t
 from jaxtyping import Float
+import transformer_lens.utils as utils
 from torch import Tensor
 from tqdm.notebook import tqdm
 from transformer_lens.hook_points import HookPoint
@@ -532,5 +533,24 @@ for neuron in top_neurons:
         barmode="group",
         log_y=True,
     ).show()
+
+# %%
+# use logit lens
+logit = model(focus_games_int[0][:-1])
+plot_board_log_probs(focus_games_string[0][:-1], logit[0])
+# %%
+def zero_ablate(act, hook):
+    act.fill_(0.0)
+    return act
+
+patch_logit = model.run_with_hooks(
+    focus_games_int[0][:-1],
+    fwd_hooks=[
+        # (utils.get_act_name('mlp_post', 5), zero_ablate),
+        # (utils.get_act_name('mlp_post', 6), zero_ablate),
+        (utils.get_act_name('mlp_post', 7), zero_ablate),
+    ]
+)
+plot_board_log_probs(focus_games_string[0][:-1], patch_logit[0])
 
 # %%
